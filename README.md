@@ -2,7 +2,7 @@
 
 非官方 ZCode Desktop 增强补丁集(Unofficial enhancement patches for ZCode Desktop)。
 
-四大能力:**ToolSearch 按需加载 MCP**(会话出生零工具 schema,上下文省约 30%)、**子代理调用级选模**(Agent 工具直接指定这次用哪个模型)、**MCP 开关实时生效**(拨开关下一请求生效)、**分屏严格均分**。
+四大能力:**ToolSearch MCP 无状态网关**(会话零 mcp__ schema,上下文省约 30%)、**子代理调用级选模**(Agent 工具直接指定这次用哪个模型)、**MCP 开关实时生效**(拨开关下一请求生效)、**分屏严格均分**。
 
 - 本仓库只含补丁脚本,不含任何官方二进制;原版文件请从自己的安装包提取。
 - 与 Z.ai 官方无关,按 MIT 协议开源;修改的是本机安装,自用请自行评估风险。
@@ -12,31 +12,28 @@
 
 ## 功能详述
 
-### 1. ToolSearch —— MCP 按需加载(v6,旗舰)
+### 1. ToolSearch —— MCP 无状态网关(v7,旗舰)
 
-**为什么做**:ZCode 把所有已启用 MCP server 的工具 schema 全量塞进每个会话的系统提示。本机实测(60+ 服务器实例、656 个工具):MCP schema 占首发请求约 **30% 上下文**,且随对话常驻。对比之下,几百个技能的目录只占 ~0.2%——因为技能走「目录 + 用时展开」两段披露,工具却是单段全量披露。官方尚未上线按需加载(其 compact 代码里留有过渡期注释)。
+**为什么做**:ZCode 把所有已启用 MCP server 的工具 schema 全量塞进每个会话的系统提示。本机实测(60+ 服务器实例、656 个工具):MCP schema 占首发请求约 **30% 上下文**,且随对话常驻。对比之下,几百个技能的目录只占 ~0.2%——因为技能走「目录 + 用时展开」两段披露,工具却是单段全量披露。
 
-**效果**:新会话工具列表里**一个 `mcp__` 都没有**,只多一个 `ToolSearch`。模型需要什么能力,当场搜索、当场加载、当回合可调用;不需要的永远不进上下文。
-
-**怎么用**(模型自己会做,人也可以在对话里说「先 ToolSearch 搜 wind」):
+**v7 的形态**(v6 按需装卸的换代,装卸本身也被证明对小模型是元认知负担,已移除):`mcp__` 工具**永远不注册**;会话只多一个无状态的 `ToolSearch` 网关,三个只读动词 + 一个透传动词,工具面从出生到死亡恒定不变:
 
 | 调用 | 行为 |
 |---|---|
-| `ToolSearch {query: "wind"}` | 按关键词搜连接池,命中(前 8)当场加载进本会话 |
-| `ToolSearch {}` | 空查询,返回全部工具目录(一行一工具:`server/tool: 描述`,超长降级为按服务器分组;两次降级) |
-| `ToolSearch {query: "*"}` | 加载全部工具 |
-| `ToolSearch {query: "-"}` | 列出本会话已加载的工具 |
-| `ToolSearch {query: "-wind"}` | 卸载匹配的工具,立即退出工具列表 |
-| `ToolSearch {query: "-*"}` | 全部卸载 |
+| `ToolSearch {}` | 全目录:一行一工具 `server/tool: 描述`,超预算降级为按服务器分组 |
+| `ToolSearch {query:"ida"}` | 关键词过滤目录;搜索面**仅 server/tool 名**(描述文本不参与匹配,杜绝子串劫持),OR 计分,部分命中也返回 |
+| `ToolSearch {tool:"ida/decompile"}` | inspect:返回该工具的完整参数 schema 与描述 |
+| `ToolSearch {tool:"ida/decompile", args:{...}}` | execute:真正执行,结果转文本返回 |
 
-已加载的工具全会话持续可用;每次加载/卸载各触发一次前缀缓存重建(代价远小于 30% schema 常驻)。UI 里显式启用的服务器,工具自动并入当前会话。搜索打分是 OR 计分 + 漏词数排序:多关键词不必全部命中,谁匹配得多、漏得少谁靠前,单关键词查询永远不会因「另一个词没中」被一票否决;零命中时返回引导语(建议空查询看目录),不返回空建议列表。加载/卸载纪律直接写在工具 description 里(阶段结束、不再用的工具族主动卸载),不依赖任何外部提示词。
+与 skill 的同构性:目录=skill 列表,inspect=skill 展开内容,execute=按 skill 指令干活。**没有任何调用改变工具面**:零加载、零卸载、零重注册,前缀缓存不被 MCP 打断;compact/resume 后零恢复成本——历史里的网关调用天然自解释,不存在「加载状态丢失」。
 
-**原理**:厂商运行时本来就有完整的注册管线——`registerMcpTools`(会话初始化时注册)与 `refreshMcpToolsIfChanged`(工具清单变化时重注册,但出厂时没有任何调用方,是段死代码)。补丁做三件事:
-1. 在两处注册点插入**会话级可见集过滤**(`__zcodeMcpWanted`,键 = 服务器 + 工具名):可见集为空则一个 MCP 工具都不注册;
-2. 注册一个 `ToolSearch` 内建工具(克隆现有工具条目以继承权限/超时/预算/取消策略,input/output schema 与 handler 返回形状严格匹配),其 handler 搜索**进程级连接池**,命中写入可见集,然后清空版本号与签名逼 `refreshMcpToolsIfChanged` 走一遍注销→重注册→缓存失效,下一发请求即见;
-3. 服务器名单签名 diff:UI 开关引起连接/断开时(这类变化不动官方的 `toolListRevision` 版本号),新出现的服务器工具自动并入可见集。
+**原理**:
+1. 两处注册点(`registerMcpTools` 首注册 / `refreshMcpToolsIfChanged` 重注册)的入参直接置空——mcp 工具一个不进注册表;
+2. 挂一个 `ToolSearch` 内建工具(克隆现有工具条目继承策略字段,input/output schema 与 handler 返回形状严格匹配);
+3. execute 路径**临场构造 vendor 的 `createMcpToolEntry` 结果但从不注册**,直接调用其 handler——权限声明、审批触发、结果预算、超时、trace、图像/内容格式化全部复用 vendor 原装实现,零复刻;
+4. 网关内等价复刻 `registerMcpTools` 的 allowedTools/disallowedTools 白名单语义(受限 agent 场景照常受限),被禁工具直接拒绝。
 
-顺带修了一个厂商坑:官方 `initializeMcp` 的 catch 会把 `mcpToolsRegistered` 置真,**一次注册失败 = 整会话永久无 MCP**。补丁改为失败不锁、下轮自动重试,并把异常堆栈落进日志。
+顺带修了一个厂商坑:官方 `initializeMcp` 的 catch 会把 `mcpToolsRegistered` 置真,**一次注册失败 = 整会话永久无 MCP**。补丁改为失败不锁、下轮自动重试,并把异常堆栈落进日志。UI 开关实时生效(v4)保留:拨开关下一请求生效——目录每次都从连接池现查,开关变化自然反映在目录里。
 
 ### 2. 子代理调用级选模(v1)
 
@@ -100,8 +97,8 @@ swap-asar.cmd
 # 打补丁(目录可写则直接换入;不可写则落到 %TEMP%,再跑 swap.cmd 提权换入)
 node apply-model-param-patch.mjs "C:\Program Files\ZCode\resources\glm\zcode.cjs"
 
-# 可选:跑 v6 回归验证(vm 里实跑 ToolSearch 七种返回形态 + 状态机断言)
-node verify-v6b.mjs
+# 可选:跑 v7 回归验证(vm 里实跑 ToolSearch 目录/inspect/execute/白名单/零服务器九种形态 + 括号平衡)
+node verify-v7.mjs
 
 # 完全退出并重启 ZCode
 ```
@@ -123,7 +120,7 @@ node apply-model-param-patch.mjs --restore "C:\Program Files\ZCode\resources\glm
 node apply-model-param-patch.mjs "C:\Program Files\ZCode\resources\glm\zcode.cjs"
 
 # 3) 回归验证
-node verify-v6b.mjs
+node verify-v7.mjs
 ```
 
 官方重构导致锚点漂移时,脚本会**逐条点名失配位置并整体中止、不写盘**——照着报错更新正则即可,不会产生半打状态。
@@ -133,7 +130,7 @@ node verify-v6b.mjs
 - 每处替换断言**恰好命中一次**,失配即中止;先写临时文件过 `node --check`,再原子换入;自动备份 `.orig-backup`。
 - 锚点全部动态捕获(利用 esbuild keepNames 的注册字符串),压缩名变化不敏感。
 - 编码铁律:`zcode.cjs` 是合法 UTF-8 文本,必须 utf8 读写;asar 里的渲染 chunk 含非 UTF-8 字节,必须 latin1 读写。混用会静默产生双重编码垃圾(语法仍合法,极难发现)。
-- 已知边界:受限 agent(带 tools 白名单)的会话里 ToolSearch 也会注册,但加载仍走与官方一致的 allowedTools 过滤;恢复的旧会话历史里可能有当时加载过的 `mcp__` 工具记录,模型需要重新 ToolSearch;每次工具集变化触发一次前缀缓存重建,属预期成本。
+- 已知边界:受限 agent(带 tools 白名单)的会话里网关同样注册,网关内复刻 allowedTools/disallowedTools 过滤,白名单语义与官方一致;execute 的结果文本经网关转写(上限 48KB),与直连调用 vendor 工具的返回形状不同;恢复的旧会话历史里可能有 v6 时代加载过的 `mcp__` 直连工具记录,新回合按 v7 语义经网关执行即可。
 - 声明:仅供本机自用与研究;ZCode 为 Z.ai 产品,本仓库与其无关;请勿将官方二进制重新分发。
 
 ## License

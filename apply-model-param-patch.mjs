@@ -325,91 +325,95 @@ if (!v4Applied) {
         `this.__zcodeMcpSrvSig=Object.keys(${snapVar}.statuses??{}).sort().join(","),` +
         `this.logger?.info("MCP tools registered"`,
       );
-      // XFo 卫语句改写:官方「n===void 0 → 早退」挡死了子代理端口(OFo 借用包装
-      // 没有 toolListRevision 方法,ToolSearch 加载后永远静默不重注册,子代理对着
-      // 「Loaded N tool(s)」幻影空转)。改为:revision 有值且未变才早退;子端口
-      // (undefined)每回合走到签名对比,可见集未变时签名相同自然防抖。
-      const xfoHeadOld = `async function ${xfo}(e){let t=this.mcpPort;if(!t||!this.mcpToolsRegistered)return;let n=t.toolListRevision?.();if(n===void 0||n===this.mcpToolListRevision)return;`;
-      const xfoHeadNew = `async function ${xfo}(e){let t=this.mcpPort;if(!t||!this.mcpToolsRegistered)return;let n=t.toolListRevision?.();if(n!==void 0&&n===this.mcpToolListRevision)return;`;
-      if (src.split(xfoHeadOld).length - 1 !== 1) {
-        console.error("[WARN] v4: XFo guard anchor mismatch — subagent-port fallback not applied");
-      } else {
-        src = src.replace(xfoHeadOld, xfoHeadNew);
-      }
       console.log("v4 applied: mcp live-toggle wired via refreshMcpToolsIfChanged");
     }
   }
 }
 
 // ============================================================
-// v6:MCP 按需加载(ToolSearch——skill 式两段披露)
+// v7:MCP 无状态网关(ToolSearch——skill 式两段披露,无装卸)
 // ============================================================
-// 会话出生不再注册任何 MCP 工具 Schema(上下文省掉大头),改为挂一个
-// ToolSearch 内建工具:模型按关键词搜索连接池里的工具,命中的当场注册进
-// 本会话(复用官方 XFo:unregister 旧 registeredMcpToolNames → 按过滤后
-// 清单重注册 → invalidateToolCache),下一发请求即可调用,全会话持续。
-// query '*' 全量加载;空 query 列出已连 server 与工具数。
-// 实现:__zcodeMcpWanted(每会话 Set,键=serverName+toolName)为可见层;
-// __zcodeMcpFilter 在 KFo/XFo 两处注册点过滤;__zcodeMcpSearchEntry 克隆
-// TodoWrite 条目(策略字段全套继承)替换名字/描述/handler。
-const v6Applied = src.includes("__zcodeMcpSearchEntry");
-if (!v6Applied) {
+// 会话出生不注册任何 mcp__ 工具 Schema(上下文省掉大头),mcp__ 工具
+// 永远不注册。ToolSearch 是无状态网关,三个只读动词 + 一个透传动词:
+//   {}                    → 全目录(一行一工具,超预算降级服务器分组)
+//   {query:"ida"}         → 关键词过滤目录(OR 计分,搜索面仅 server/tool 名)
+//   {tool:"ida/decompile"} → 返回该工具的完整 inputSchema 与描述
+//   {tool:"...",args:{}}  → 临场构造 UCn entry(不注册)直接调其 handler,
+//                           权限/审批/预算/超时/trace/结果格式化全部复用 vendor。
+// 工具面从出生到死亡恒定:零状态、零装卸、零重注册,前缀缓存不被 MCP 打断。
+// 权限语义:$bt 的白名单(allowedTools/disallowedTools)在网关内等价复刻
+// (toolFound 且被禁 → 报错),审批由 UCn.permission(needsApproval=true)
+// 在 executor 层照常触发 — 网关不绕过任何 vendor 权限层。
+const v7Applied = src.includes("__zcodeMcpSearchEntry");
+if (!v7Applied) {
   const mInit = src.match(/\(([\w$]+),"initializeMcp"\)/);
-  const mRef = src.match(/\(([\w$]+),"refreshMcpToolsIfChanged"\)/);
-  const headOk = mInit && mRef && src.includes(`async function ${mInit[1]}(e){async function __zcodeMcpSync(e){`);
+  // v4 后形态:KFo 体开头插入了 __zcodeMcpSync 定义,gate 变为 return __zcodeMcpSync.call(this,e);
+  const headOk = mInit && src.includes(`async function ${mInit[1]}(e){async function __zcodeMcpSync`) &&
+    src.includes(`if(this.mcpToolsRegistered)return __zcodeMcpSync.call(this,${mInit[1] === "KFo" ? "e" : "e"});`);
   if (!headOk) {
-    console.error("[WARN] v6: anchors missing/changed (v4 must be applied first) — skipping tool-search patch");
+    console.error("[WARN] v7: anchors missing/changed (v4 must be applied first) — skipping gateway patch");
   } else {
-    const xfo = mRef[1];
-    // 两处注册点的局部名:KFo 是 X.tools 形态,XFo 是纯变量形态
     const regK = src.match(/([\w$]+)=([\w$]+)\(this\.registry,([\w$]+),([\w$]+)\.tools,\{allowedTools:this\.config\.toolAllowlist/);
     const regX = src.match(/([\w$]+)=([\w$]+)\(this\.registry,([\w$]+),([\w$]+),\{allowedTools:this\.config\.toolAllowlist/);
     const sigRec = src.match(/(this\.__zcodeMcpSrvSig=Object\.keys\((\w+)\.statuses\?\?\{\}\)\.sort\(\)\.join\(.{1,6}?\),)/);
     if (!regK || !regX || !sigRec) {
-      console.error("[WARN] v6: register-call anchors not usable — skipping tool-search patch");
+      console.error("[WARN] v7: register-call anchors not usable — skipping gateway patch");
     } else {
-      const FILTER = `function __zcodeMcpFilter(t){let w=this&&this.__zcodeMcpWanted;if(!w||w.size===0)return[];return t.filter(d=>w.has(d.serverName+"\\u0001"+d.toolName))}`;
       const FACTORY =
         `function __zcodeMcpSearchEntry(rt){let P=rt.registry.get("Read")||rt.registry.get("Grep")||rt.registry.get("TodoWrite");if(!P)return null;` +
-        `return {capability:P.capability,inputSchema:{type:"object",properties:{query:{type:"string",description:"Empty = show full tool catalog. Server/tool name keywords = load matches. '*' = load all. Leading '-' = unload ('-' lists loaded, '-keywords' unloads matches, '-*' unloads all)."}}},outputSchema:{$schema:"http://json-schema.org/draft-07/schema#",type:"object",properties:{summary:{type:"string"},servers:{type:"string"},tools:{type:"array",items:{type:"string"}}},required:["summary"]},permission:P.permission,resultBudget:P.resultBudget,timeout:P.timeout,cancellation:P.cancellation,trace:P.trace,` +
-        `metadata:{...P.metadata,name:"ToolSearch",readOnly:!0,destructive:!1,concurrentSafe:!0,needsApproval:!1,sideEffectScope:"session",` +
-        `description:"Search & load MCP tools (tools from external MCP servers ONLY). Core built-in tools (Read, Grep, Glob, Bash, Edit, Write, TodoWrite, Agent, ...) are ALWAYS directly available without this tool - never search for them. This session starts with NO MCP tools loaded. FIRST call with empty query to see the full tool catalog (one line per tool). Then load what you need by querying a server name or a tool name (e.g. 'ida', 'decompile') - matched tools become immediately callable and stay loaded until unloaded. Single distinctive keywords work best; a query only needs to match name or description. Prefix '-' to unload: '-' lists loaded tools, '-keywords' unloads matches, '-*' unloads all. Unload when a work phase is done and those tools will not be needed again - a small loaded set keeps context small; when unsure, keep tools loaded."},` +
+        `return {capability:P.capability,` +
+        `inputSchema:{type:"object",properties:{query:{type:"string",description:"Optional. Filter the catalog: keywords against server/tool names only (e.g. 'ida', 'decompile'). Omit to see the full catalog."},tool:{type:"string",description:"Optional. 'serverName/toolName' to inspect (returns its full parameter schema and description) or to execute. Use the exact names shown in the catalog."},args:{type:"object",description:"Optional. Arguments object for the tool being executed. Provide together with 'tool'. Get the expected parameters from an inspect call first.",additionalProperties:true}},required:[]},` +
+        `outputSchema:{$schema:"http://json-schema.org/draft-07/schema#",type:"object",properties:{summary:{type:"string"},tools:{type:"array",items:{type:"string"}}},required:["summary"]},` +
+        `permission:{permission:"mcp",reason:"MCP gateway ToolSearch executes tools on external MCP servers",riskLevel:"medium",sideEffectScope:"network",needsApproval:!0,patternSources:["toolName","input","network"],denyPriority:"beforeAsk"},` +
+        `resultBudget:{maxInlineBytes:1e5,maxModelBytes:5e4,strategy:"truncate",preview:{direction:"head"}},timeout:P.timeout,cancellation:P.cancellation,trace:P.trace,` +
+        `metadata:{...P.metadata,name:"ToolSearch",readOnly:!1,destructive:!1,concurrentSafe:!0,needsApproval:!1,sideEffectScope:"network",` +
+        `description:"Gateway to MCP tools (tools from external MCP servers ONLY). Core built-in tools (Read, Grep, Glob, Bash, Edit, Write, TodoWrite, Agent, ...) are ALWAYS directly available - never use this gateway for them. MCP tools are NOT listed in your tools. FIRST call without arguments to see the full catalog (one line per MCP tool). Then: ToolSearch {tool:'server/tool'} inspects that tool (returns its parameter schema), and ToolSearch {tool:'server/tool', args:{...}} executes it. All three are read-only catalog/inspect, execute runs the real tool. Nothing is loaded or unloaded - the gateway is stateless, your tool list never changes."},` +
         `handler:async(i,c)=>{let port=rt.mcpPort;if(!port)return{summary:"MCP is not available in this session."};` +
         `let all;try{all=await port.listTools()}catch(err){return{summary:"MCP tool list unavailable: "+(err&&err.message||err)}}` +
-        `let q=String((i&&i.query)||"").trim(),picks;` +
-        `if(q[0]==="-"){let rest=q.slice(1).trim(),w=rt.__zcodeMcpWanted;if(!w||w.size===0)return{summary:"Nothing is loaded in this session yet."};if(!rest){let byL={};for(const k of w){let p2=k.split("\\u0001");(byL[p2[0]]=byL[p2[0]]||[]).push(p2[1])}return{summary:"Currently loaded MCP tools:",tools:Object.entries(byL).map(e2=>e2[0]+": "+e2[1].join(", "))}}if(rest==="*")w.clear();else{let toks2=rest.toLowerCase().split(/\\s+/).filter(Boolean);for(const k of [...w]){let hay2=k.toLowerCase();if(toks2.some(x=>hay2.includes(x)))w.delete(k)}}let left=[...w].map(k=>k.split("\\u0001")[0]+"/"+k.split("\\u0001")[1]);rt.mcpToolListRevision=void 0,rt.mcpToolsSignature=void 0;try{await XFo.call(rt,rt.rootTraceContext)}catch(err){return{summary:"MCP tool unload failed: "+(err&&err.message||err)}}return{summary:rest==="*"?"Unloaded all MCP tools from this session; call ToolSearch again to reload any.":"Unloaded matching tools. Still loaded and callable:",tools:left}}` +
         `if(!all.length)return{summary:"No MCP servers are connected in this session."};` +
-        `if(q==="*")picks=all;else if(!q){let byS={};for(const t of all){(byS[t.serverName]=byS[t.serverName]||[]).push(t.toolName)}let lines=all.map(t=>"- "+t.serverName+"/"+t.toolName+": "+String(t.description||"").replace(/\\s+/g," ").slice(0,80)).join("\\n");if(lines.length>24000){lines=Object.entries(byS).map(e2=>"- "+e2[0]+" ("+e2[1].length+" tools): "+e2[1].join(", ")).join("\\n");if(lines.length>24000)lines=Object.entries(byS).map(e2=>"- "+e2[0]+" ("+e2[1].length+" tools)").join("\\n")}return{summary:"MCP tool catalog ("+all.length+" tools, "+Object.keys(byS).length+" servers) - load with ToolSearch query keywords (server name or tool name):",tools:lines.split("\\n")}}` +
-        `else{let toks=q.toLowerCase().split(/\\s+/).filter(Boolean);picks=all.map(t=>{let hay=(t.serverName+" "+t.toolName+" "+(t.description||"")).toLowerCase(),sc=0,miss=0;for(const k of toks){let n=hay.split(k).length-1;if(n===0)miss++;sc+=n}return{t,sc,miss}}).filter(x=>x.sc>0).sort((a,b)=>a.miss-b.miss||b.sc-a.sc).slice(0,8).map(x=>x.t)}` +
-        `if(picks.length===0)return{summary:"No MCP tool matches '"+q+"'. Call ToolSearch with an empty query to see the full catalog, then retry with a server name or tool name from it."};` +
-        `let w=rt.__zcodeMcpWanted||(rt.__zcodeMcpWanted=new Set());for(const t of picks)w.add(t.serverName+"\\u0001"+t.toolName);` +
-        `rt.mcpToolListRevision=void 0,rt.mcpToolsSignature=void 0;try{await ${xfo}.call(rt,rt.rootTraceContext)}catch(err){return{summary:"MCP tool load failed: "+(err&&err.message||err)}};` +
-        `return{summary:"Loaded "+picks.length+" tool(s) into this session - callable now and visible in your tools from this point:",tools:picks.map(t=>t.serverName+"/"+t.toolName+": "+(t.description||"").slice(0,300))}}}}`;
-      // 1) 注入过滤函数与工具工厂(KFo 之前,模块作用域,XFo/$bt 均可见)
-      src = src.replace(`async function ${mInit[1]}(e){async function __zcodeMcpSync(e){`,
-        FILTER + FACTORY + `async function ${mInit[1]}(e){async function __zcodeMcpSync(e){`);
-      // 2) 两处注册点套可见层过滤
+        `let q=String((i&&i.query)||"").trim(),toolSpec=String((i&&i.tool)||"").trim(),args=(i&&i.args&&typeof i.args==="object")?i.args:void 0;` +
+        // inspect / execute 分支:toolSpec 形如 server/tool
+        `if(toolSpec){let slash=toolSpec.indexOf("/");let sName=slash>0?toolSpec.slice(0,slash):toolSpec,tName=slash>0?toolSpec.slice(slash+1):"";` +
+        `if(!tName)return{summary:"Bad tool reference '"+toolSpec+"'. Use 'serverName/toolName' exactly as shown in the catalog."};` +
+        `let t=all.find(x=>x.serverName===sName&&x.toolName===tName);` +
+        `if(!t){let near=all.filter(x=>x.serverName===sName||x.toolName===tName).map(x=>x.serverName+"/"+x.toolName).slice(0,5);return{summary:"No such MCP tool: '"+toolSpec+"'."+(near.length?" Closest: "+near.join(", ")+"":" Call ToolSearch with no arguments to see the full catalog.")}}` +
+        // 白名单复刻(与 $bt 同源语义:disallowed 拒绝,allowed 显式列出才放行)
+        // handler 是箭头函数无 this 绑定,配置一律走闭包里的 rt
+        `let alw=rt.config&&rt.config.toolAllowlist?new Set(rt.config.toolAllowlist):void 0,dis=rt.config&&rt.config.toolDisallowlist?new Set(rt.config.toolDisallowlist):void 0;let rn=t.serverName+"__"+t.toolName;` +
+        `if(dis&&dis.has(rn))return{summary:"Blocked: "+rn+" is disallowed in this session."};if(alw&&!alw.has(rn)&&!alw.has(t.serverName))return{summary:"Blocked: "+rn+" is not in this session's allowed tools."};` +
+        // inspect:返回参数表
+        `if(!args){let sch=t.inputSchema&&typeof t.inputSchema==="object"?t.inputSchema:{type:"object",properties:{},additionalProperties:!0};` +
+        `return{summary:"MCP tool '"+toolSpec+"' - inspect (arguments schema below; execute with ToolSearch {tool:'"+toolSpec+"', args:{...}}):",tools:[String(t.description||"(no description)"),"arguments schema: "+JSON.stringify(sch)]}}` +
+        // execute:临场构造 UCn entry(不注册),复用其 handler(权限/预算/trace/结果格式化)
+        // UCn handler 返回 MCP 原始形状 {content:[blocks]},网关转成自己的 {summary,tools}
+        `let entry;try{entry=UCn(rn,t,port,!1,{pluginId:void 0})}catch(err){return{summary:"Gateway cannot build tool entry for "+toolSpec+": "+(err&&err.message||err)}}` +
+        `let res;try{res=await entry.handler(args,c)}catch(err){return{summary:"MCP tool '"+toolSpec+"' failed: "+(err&&err.message||err)}}` +
+        `let txt="";if(res&&Array.isArray(res.content)){txt=res.content.map(b=>b&&typeof b==="object"&&typeof b.text==="string"?b.text:JSON.stringify(b)).join("\\n")}else if(res!==void 0&&res!==null)txt=typeof res==="string"?res:JSON.stringify(res);` +
+        `if(txt.length>48000)txt=txt.slice(0,48000)+"\\n[truncated by gateway]";` +
+        `return{summary:"MCP tool '"+toolSpec+"' returned:",tools:txt?[txt]:[]}}` +
+        // 目录分支:空=全量,query=关键词过滤(搜索面仅 server/tool 名,断子串劫持)
+        `let byS={};for(const t of all){(byS[t.serverName]=byS[t.serverName]||[]).push(t.toolName)}` +
+        `let picks;` +
+        `if(!q)picks=all;else{let toks=q.toLowerCase().split(/\\s+/).filter(Boolean);picks=all.map(t=>{let hay=(t.serverName+" "+t.toolName).toLowerCase(),sc=0,miss=0;for(const k of toks){let n=hay.split(k).length-1;if(n===0)miss++;sc+=n}return{t,sc,miss}}).filter(x=>x.sc>0).sort((a,b)=>a.miss-b.miss||b.sc-a.sc).map(x=>x.t)}` +
+        `if(picks.length===0)return{summary:"No MCP tool matches '"+q+"'. Call ToolSearch with no arguments to see the full catalog, then retry with a server name or tool name from it."};` +
+        `let lines=picks.map(t=>"- "+t.serverName+"/"+t.toolName+": "+String(t.description||"").replace(/\\s+/g," ").slice(0,80)).join("\\n");` +
+        `if(lines.length>24000){lines=Object.entries(byS).filter(e2=>picks.some(t=>t.serverName===e2[0])).map(e2=>"- "+e2[0]+" ("+e2[1].length+" tools): "+e2[1].join(", ")).join("\\n");if(lines.length>24000)lines=Object.entries(byS).filter(e2=>picks.some(t=>t.serverName===e2[0])).map(e2=>"- "+e2[0]+" ("+e2[1].length+" tools)").join("\\n")}` +
+        `return{summary:"MCP tool catalog ("+picks.length+" of "+all.length+" tools, "+Object.keys(byS).length+" servers) - inspect with ToolSearch {tool:'server/tool'}, execute with ToolSearch {tool:'server/tool', args:{...}}:",tools:lines.split("\\n")}}}}`;
+      // 1) 注入工厂(KFo 之前,模块作用域,UCn/$bt 均可见)
+      src = src.replace(`async function ${mInit[1]}(e){async function __zcodeMcpSync`,
+        FACTORY + `async function ${mInit[1]}(e){async function __zcodeMcpSync`);
+      // 2) 两处注册点一刀切隐藏(mcp__ 工具永不注册)
       src = src.replace(`${regK[2]}(this.registry,${regK[3]},${regK[4]}.tools,{allowedTools:this.config.toolAllowlist`,
-        `${regK[2]}(this.registry,${regK[3]},__zcodeMcpFilter.call(this,${regK[4]}.tools),{allowedTools:this.config.toolAllowlist`);
+        `${regK[2]}(this.registry,${regK[3]},[],{allowedTools:this.config.toolAllowlist`);
       src = src.replace(`${regX[2]}(this.registry,${regX[3]},${regX[4]},{allowedTools:this.config.toolAllowlist`,
-        `${regX[2]}(this.registry,${regX[3]},__zcodeMcpFilter.call(this,${regX[4]}),{allowedTools:this.config.toolAllowlist`);
-      // 3) 首次注册路径:记完名单签名后挂 ToolSearch 本体
+        `${regX[2]}(this.registry,${regX[3]},[],{allowedTools:this.config.toolAllowlist`);
+      // 3) 首次注册路径:挂网关本体(注册列表为空,只挂 ToolSearch)
       src = src.replace(sigRec[1] + `this.logger?.info("MCP tools registered"`,
-        sigRec[1] + `this.__zcodeMcpSearchReady=!0,(this.__zcodeMcpSearchEntryObj=__zcodeMcpSearchEntry(this))&&this.registry.register(this.__zcodeMcpSearchEntryObj),this.invalidateToolCache(),this.logger?.info("MCP tools registered"`);
-      // 4) v4 助手升级:头部挂 ToolSearch 兜底创建;名单变化时把新出现服务器的
-      //    工具并入按需清单(UI 显式启用即时生效),再强制走重注册
+        sigRec[1] + `(this.__zcodeMcpSearchEntryObj=__zcodeMcpSearchEntry(this))&&this.registry.register(this.__zcodeMcpSearchEntryObj),this.invalidateToolCache(),this.logger?.info("MCP tools registered"`);
+      // 4) v4 助手头部兜底创建(注册路径未走到时)
       src = src.replace(/async function __zcodeMcpSync\((\w)\)\{/,
-        `async function __zcodeMcpSync($1){if(!this.__zcodeMcpSearchReady){this.__zcodeMcpSearchReady=!0;try{let se=__zcodeMcpSearchEntry(this);se&&this.registry.register(se),this.invalidateToolCache()}catch(i){}}`);
-      const mSig = src.match(/let (\w)=await (\w)\.status\(\),(\w)=Object\.keys\(\1\)\.sort\(\)\.join\(","\);if\(\3!==this\.__zcodeMcpSrvSig\)\{this\.__zcodeMcpSrvSig=\3,this\.mcpToolListRevision=void 0\}/);
-      if (mSig) {
-        src = src.replace(
-          `if(${mSig[3]}!==this.__zcodeMcpSrvSig){this.__zcodeMcpSrvSig=${mSig[3]},this.mcpToolListRevision=void 0}`,
-          `if(${mSig[3]}!==this.__zcodeMcpSrvSig){if(this.__zcodeMcpSrvSig!==void 0){let o=new Set(this.__zcodeMcpSrvSig.split(",").filter(Boolean)),w=this.__zcodeMcpWanted||(this.__zcodeMcpWanted=new Set());try{let tl=await ${mSig[2]}.listTools();for(const t of tl)if(!o.has(t.serverName))w.add(t.serverName+"\\u0001"+t.toolName)}catch(e2){}}this.__zcodeMcpSrvSig=${mSig[3]},this.mcpToolListRevision=void 0}`,
-        );
-      } else {
-        console.error("[WARN] v6: __zcodeMcpSync sig-change block not matched — UI-enable auto-load unavailable");
-      }
-      console.log("v6 applied: ToolSearch on-demand MCP loading wired");
+        `async function __zcodeMcpSync($1){if(!this.__zcodeMcpSearchEntryObj){try{let se=__zcodeMcpSearchEntry(this);se&&this.registry.register(se),this.invalidateToolCache()}catch(i){}}`);
+      console.log("v7 applied: ToolSearch stateless MCP gateway wired (catalog/inspect/execute, zero load/unload)");
     }
   }
 }
