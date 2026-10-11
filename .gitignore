@@ -1,0 +1,17 @@
+# 官方原版二进制与本机备份(版权与体积原因,不入库;原版请从官方安装包自取)
+pristine-*/
+*.orig-backup
+*.pre-*
+
+# 补丁管线临时产物
+zcode-patched.tmp.*
+v6*.cjs
+*-rebuild.cjs
+test-pristine.cjs
+
+# 本机插件状态与杂项
+.mimosa/
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
