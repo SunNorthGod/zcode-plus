@@ -325,6 +325,17 @@ if (!v4Applied) {
         `this.__zcodeMcpSrvSig=Object.keys(${snapVar}.statuses??{}).sort().join(","),` +
         `this.logger?.info("MCP tools registered"`,
       );
+      // XFo 卫语句改写:官方「n===void 0 → 早退」挡死了子代理端口(OFo 借用包装
+      // 没有 toolListRevision 方法,ToolSearch 加载后永远静默不重注册,子代理对着
+      // 「Loaded N tool(s)」幻影空转)。改为:revision 有值且未变才早退;子端口
+      // (undefined)每回合走到签名对比,可见集未变时签名相同自然防抖。
+      const xfoHeadOld = `async function ${xfo}(e){let t=this.mcpPort;if(!t||!this.mcpToolsRegistered)return;let n=t.toolListRevision?.();if(n===void 0||n===this.mcpToolListRevision)return;`;
+      const xfoHeadNew = `async function ${xfo}(e){let t=this.mcpPort;if(!t||!this.mcpToolsRegistered)return;let n=t.toolListRevision?.();if(n!==void 0&&n===this.mcpToolListRevision)return;`;
+      if (src.split(xfoHeadOld).length - 1 !== 1) {
+        console.error("[WARN] v4: XFo guard anchor mismatch — subagent-port fallback not applied");
+      } else {
+        src = src.replace(xfoHeadOld, xfoHeadNew);
+      }
       console.log("v4 applied: mcp live-toggle wired via refreshMcpToolsIfChanged");
     }
   }
