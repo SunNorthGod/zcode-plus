@@ -361,10 +361,12 @@ if (!v7Applied) {
       const mA = src.match(/\(([\w$]+),"toMcpToolName"\)/);
       const mN = src.match(/\(([\w$]+),"normalizeToolNameAlias"\)/);
       const mK = src.match(/\(([\w$]+),"toRegisteredMcpToolName"\)/);
-      if (!regK || !regX || !sigRec || !mA || !mN || !mK) {
+      const mPie = src.match(/\(([\w$]+),"createMcpToolDisplay"\)/);
+      const mSgt = src.match(/r\(([\w$]+),"createToolResultDisplay"\)/);
+      if (!regK || !regX || !sigRec || !mA || !mN || !mK || !mPie || !mSgt) {
         console.error("[WARN] v7: register-call anchors not usable — skipping gateway patch");
       } else {
-        const ad = mA[1], f3 = mN[1], ko = mK[1];
+        const ad = mA[1], f3 = mN[1], ko = mK[1], pie = mPie[1], sgt = mSgt[1];
       const FACTORY =
         `function __zcodeMcpSearchEntry(rt){let P=rt.registry.get("Read")||rt.registry.get("Grep")||rt.registry.get("TodoWrite");if(!P)return null;` +
         `return {capability:P.capability,` +
@@ -391,14 +393,14 @@ if (!v7Applied) {
         `if(dis&&dis.has(rn))return{summary:"Blocked: "+rn+" is disallowed in this session."};if(alw&&!alw.has(rn))return{summary:"Blocked: "+rn+" is not in this session's allowed tools."};` +
         // inspect:返回参数表
         `if(!args){let sch=t.inputSchema&&typeof t.inputSchema==="object"?t.inputSchema:{type:"object",properties:{},additionalProperties:!0};` +
-        `return{summary:"MCP tool '"+toolSpec+"' - inspect (arguments schema below; execute with ToolSearch {tool:'"+toolSpec+"', args:{...}}):",tools:[String(t.description||"(no description)"),"arguments schema: "+JSON.stringify(sch)]}}` +
+        `return{summary:"[inspect "+toolSpec+"] params & description:",tools:[String(t.description||"(no description)"),"arguments schema: "+JSON.stringify(sch)]}}` +
         // execute:临场构造 UCn entry(不注册),复用其 handler(权限/预算/trace/结果格式化)
         // UCn handler 返回 MCP 原始形状 {content:[blocks]},网关转成自己的 {summary,tools}
         `let entry;try{entry=UCn(rn,t,port,!1,{pluginId:void 0})}catch(err){return{summary:"Gateway cannot build tool entry for "+toolSpec+": "+(err&&err.message||err)}}` +
         `let res;try{res=await entry.handler(args,c)}catch(err){return{summary:"MCP tool '"+toolSpec+"' failed: "+(err&&err.message||err)}}` +
         `let txt="";if(res&&Array.isArray(res.content)){txt=res.content.map(b=>b&&typeof b==="object"&&typeof b.text==="string"?b.text:JSON.stringify(b)).join("\\n")}else if(res!==void 0&&res!==null)txt=typeof res==="string"?res:JSON.stringify(res);` +
         `if(txt.length>48000)txt=txt.slice(0,48000)+"\\n[truncated by gateway]";` +
-        `return{summary:"MCP tool '"+toolSpec+"' returned:",tools:txt?[txt]:[]}}` +
+        `return{summary:"["+toolSpec+"] returned:",tools:txt?[txt]:[],mcpDisplay:{serverName:sName,toolName:tName}}}` +
         // 目录分支:空=全量,query=关键词过滤(搜索面仅 server/tool 名,断子串劫持)
         `let byS={};for(const t of all){(byS[t.serverName]=byS[t.serverName]||[]).push(t.toolName)}` +
         `let picks;` +
@@ -421,6 +423,16 @@ if (!v7Applied) {
       // 4) v4 助手头部兜底创建(注册路径未走到时)
       src = src.replace(/async function __zcodeMcpSync\((\w)\)\{/,
         `async function __zcodeMcpSync($1){if(!this.__zcodeMcpSearchEntryObj){try{let se=__zcodeMcpSearchEntry(this);se&&this.registry.register(se),this.invalidateToolCache()}catch(i){}}`);
+      // 5) UI 行标题:createToolResultDisplay 头部插 ToolSearch 分支 —
+      //    网关 execute 返回值带 mcpDisplay{serverName,toolName},转成 vendor 的
+      //    mcp_tool display 形态(Pie 同款),UI 行标题即显示实际执行的 server/tool
+      const sgtHeadOld = `function ${sgt}(e,t,n){if(e==="Bash")`;
+      const sgtHeadNew = `function ${sgt}(e,t,n){if(e==="ToolSearch"&&t&&typeof t.mcpDisplay=="object"){let d=${pie}({...t.mcpDisplay,description:t.summary},t);if(d)return d}if(e==="Bash")`;
+      if (src.split(sgtHeadOld).length - 1 !== 1) {
+        console.error("[WARN] v7: createToolResultDisplay anchor mismatch — UI row title will stay 'ToolSearch'");
+      } else {
+        src = src.replace(sgtHeadOld, sgtHeadNew);
+      }
       console.log("v7 applied: ToolSearch stateless MCP gateway wired (catalog/inspect/execute, zero load/unload)");
     }
   }
