@@ -27,6 +27,34 @@ console.log("brace-balance:", d);
 if (d !== 0) { console.error("FAIL: unbalanced"); process.exit(1); }
 
 // 2) vm 环境:UCn 是 vendor 的 entry 工厂,给替身以验证 execute 路径
+// 动态解析 vendor 函数名(升级后混淆名可能变化)
+const mA = all.match(/\(([\w$]+),"toMcpToolName"\)/);
+const mN = all.match(/\(([\w$]+),"normalizeToolNameAlias"\)/);
+const mK = all.match(/\(([\w$]+),"toRegisteredMcpToolName"\)/);
+if (!mA || !mN || !mK) { console.error("vendor name anchors missing"); process.exit(1); }
+// 从 bundle 中提取函数体源码注入 vm(与真实运行时同源);依赖链函数一并提取
+function extractFn(name) {
+  const lines = all.split("\n");
+  for (const ln of lines) {
+    const i = ln.indexOf(`function ${name}(`);
+    if (i >= 0) {
+      // 找到函数体:括号平衡截取
+      let d = 0, inS = null;
+      for (let j = i; j < ln.length; j++) {
+        const c = ln[j];
+        if (inS) { if (c === "\\") { j++; continue } if (c === inS) inS = null; continue }
+        if (c === '"' || c === "'") { inS = c; continue }
+        if (c === "{") d++; else if (c === "}") { d--; if (d === 0) return ln.slice(i, j + 1); }
+      }
+    }
+  }
+  return null;
+}
+const mN8 = all.match(/\(([\w$]+),"toModelVisibleMcpNamePart"\)/);
+if (!mN8) { console.error("N8 anchor missing"); process.exit(1); }
+const fnSrc = [extractFn(mA[1]), extractFn(mN[1]), extractFn(mK[1]), extractFn(mN8[1])]
+  .filter(Boolean).join("\n");
+if (fnSrc.split("function").length - 1 !== 4) { console.error("fn extraction incomplete"); process.exit(1); }
 const tools = [
   { serverName: "wind", toolName: "wind-stock", description: "stock quotes", inputSchema: { type: "object", properties: { code: { type: "string" } }, required: ["code"] } },
   { serverName: "wind", toolName: "wind-index", description: "index quotes" },
@@ -47,7 +75,8 @@ const ctx = {
   },
 };
 vm.createContext(ctx);
-vm.runInContext(code + ";globalThis.__entry=__zcodeMcpSearchEntry", ctx);
+vm.runInContext(fnSrc, ctx);
+vm.runInContext(code + "\n;globalThis.__entry=__zcodeMcpSearchEntry", ctx);
 const entry = ctx.__entry(fake);
 console.log("entry name:", entry?.metadata?.name);
 
@@ -86,14 +115,14 @@ const os = entry.outputSchema;
   // 4) execute 确实走了 UCn
   console.log("UCn invoked for execute:", ucCalls === 1);
   if (ucCalls !== 1) ok = false;
-  // 5) 白名单拒绝路径
-  fake.config.toolDisallowlist = ["wind__wind-stock"];
+  // 5) 白名单拒绝路径(条目用 vendor 注册名形态 mcp__server__tool)
+  fake.config.toolDisallowlist = ["mcp__wind__wind-stock"];
   const blocked = await entry.handler({ tool: "wind/wind-stock", args: {} }, {});
   const bOk = /Blocked/.test(blocked.summary);
   console.log("   " + (bOk ? "OK  " : "FAIL") + " disallowlist-block: " + blocked.summary.slice(0, 60));
   if (!bOk) ok = false;
   fake.config.toolDisallowlist = undefined;
-  fake.config.toolAllowlist = ["ida__decompile"];
+  fake.config.toolAllowlist = ["mcp__ida__decompile"];
   const allowed = await entry.handler({ tool: "ida/decompile", args: { addr: "1" } }, {});
   const disallowed = await entry.handler({ tool: "wind/wind-stock", args: {} }, {});
   const aOk = !/Blocked/.test(allowed.summary) && /Blocked/.test(disallowed.summary);

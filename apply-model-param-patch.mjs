@@ -353,12 +353,18 @@ if (!v7Applied) {
   if (!headOk) {
     console.error("[WARN] v7: anchors missing/changed (v4 must be applied first) — skipping gateway patch");
   } else {
-    const regK = src.match(/([\w$]+)=([\w$]+)\(this\.registry,([\w$]+),([\w$]+)\.tools,\{allowedTools:this\.config\.toolAllowlist/);
-    const regX = src.match(/([\w$]+)=([\w$]+)\(this\.registry,([\w$]+),([\w$]+),\{allowedTools:this\.config\.toolAllowlist/);
-    const sigRec = src.match(/(this\.__zcodeMcpSrvSig=Object\.keys\((\w+)\.statuses\?\?\{\}\)\.sort\(\)\.join\(.{1,6}?\),)/);
-    if (!regK || !regX || !sigRec) {
-      console.error("[WARN] v7: register-call anchors not usable — skipping gateway patch");
-    } else {
+      const regK = src.match(/([\w$]+)=([\w$]+)\(this\.registry,([\w$]+),([\w$]+)\.tools,\{allowedTools:this\.config\.toolAllowlist/);
+      const regX = src.match(/([\w$]+)=([\w$]+)\(this\.registry,([\w$]+),([\w$]+),\{allowedTools:this\.config\.toolAllowlist/);
+      const sigRec = src.match(/(this\.__zcodeMcpSrvSig=Object\.keys\((\w+)\.statuses\?\?\{\}\)\.sort\(\)\.join\(.{1,6}?\),)/);
+      // vendor 名捕获:注册名构造(aD=toMcpToolName)、规范化(f3e=normalizeToolNameAlias)、
+      // CUA 特例名(kOa=toRegisteredMcpToolName)
+      const mA = src.match(/\(([\w$]+),"toMcpToolName"\)/);
+      const mN = src.match(/\(([\w$]+),"normalizeToolNameAlias"\)/);
+      const mK = src.match(/\(([\w$]+),"toRegisteredMcpToolName"\)/);
+      if (!regK || !regX || !sigRec || !mA || !mN || !mK) {
+        console.error("[WARN] v7: register-call anchors not usable — skipping gateway patch");
+      } else {
+        const ad = mA[1], f3 = mN[1], ko = mK[1];
       const FACTORY =
         `function __zcodeMcpSearchEntry(rt){let P=rt.registry.get("Read")||rt.registry.get("Grep")||rt.registry.get("TodoWrite");if(!P)return null;` +
         `return {capability:P.capability,` +
@@ -377,10 +383,12 @@ if (!v7Applied) {
         `if(!tName)return{summary:"Bad tool reference '"+toolSpec+"'. Use 'serverName/toolName' exactly as shown in the catalog."};` +
         `let t=all.find(x=>x.serverName===sName&&x.toolName===tName);` +
         `if(!t){let near=all.filter(x=>x.serverName===sName||x.toolName===tName).map(x=>x.serverName+"/"+x.toolName).slice(0,5);return{summary:"No such MCP tool: '"+toolSpec+"'."+(near.length?" Closest: "+near.join(", ")+"":" Call ToolSearch with no arguments to see the full catalog.")}}` +
-        // 白名单复刻(与 $bt 同源语义:disallowed 拒绝,allowed 显式列出才放行)
-        // handler 是箭头函数无 this 绑定,配置一律走闭包里的 rt
-        `let alw=rt.config&&rt.config.toolAllowlist?new Set(rt.config.toolAllowlist):void 0,dis=rt.config&&rt.config.toolDisallowlist?new Set(rt.config.toolDisallowlist):void 0;let rn=t.serverName+"__"+t.toolName;` +
-        `if(dis&&dis.has(rn))return{summary:"Blocked: "+rn+" is disallowed in this session."};if(alw&&!alw.has(rn)&&!alw.has(t.serverName))return{summary:"Blocked: "+rn+" is not in this session's allowed tools."};` +
+        // 白名单复刻(与 $bt 同源语义,逐字对齐 vendor 形态):
+        //   注册名 = aD(descriptor) = "mcp__"+N8(server)+"__"+N8(tool)(CUA 特例走 kOa)
+        //   allowed/disallowed 集条目经 f3e 规范化(jDa 去参数后 f3e,f3e 只做别名归一)
+        //   handler 是箭头函数无 this 绑定,配置一律走闭包里的 rt
+        `let alw=rt.config&&rt.config.toolAllowlist?new Set(rt.config.toolAllowlist.map(${f3})):void 0,dis=rt.config&&rt.config.toolDisallowlist?new Set(rt.config.toolDisallowlist.map(${f3})):void 0;let rn=${ko}(t,!1);` +
+        `if(dis&&dis.has(rn))return{summary:"Blocked: "+rn+" is disallowed in this session."};if(alw&&!alw.has(rn))return{summary:"Blocked: "+rn+" is not in this session's allowed tools."};` +
         // inspect:返回参数表
         `if(!args){let sch=t.inputSchema&&typeof t.inputSchema==="object"?t.inputSchema:{type:"object",properties:{},additionalProperties:!0};` +
         `return{summary:"MCP tool '"+toolSpec+"' - inspect (arguments schema below; execute with ToolSearch {tool:'"+toolSpec+"', args:{...}}):",tools:[String(t.description||"(no description)"),"arguments schema: "+JSON.stringify(sch)]}}` +
