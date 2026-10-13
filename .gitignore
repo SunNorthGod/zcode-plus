@@ -6,6 +6,7 @@ pristine-*/
 # 补丁管线临时产物
 zcode-patched.tmp.*
 v6*.cjs
+v3*.cjs
 *-rebuild.cjs
 test-pristine.cjs
 

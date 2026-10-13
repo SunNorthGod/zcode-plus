@@ -2,7 +2,8 @@
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
-const all = readFileSync("v7.cjs", "utf8");
+const target = process.argv[2] || "v7.cjs";
+const all = readFileSync(target, "utf8");
 const L = all.split("\n")[14627];
 const code = L.slice(L.indexOf("function __zcodeMcpSearchEntry(rt){"), L.indexOf("async function KFo(e){"));
 

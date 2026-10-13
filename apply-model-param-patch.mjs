@@ -246,7 +246,7 @@ applyN(
   (g) => g[1] + `description:${g[2]}.description+(${chainExplore}?" \\u00b7 "+${chainExplore}:""),` + g[3],
 );
 } else {
-  console.log("v2 already applied — skipping row-display");
+  console.log("v2 deprecated by default — skipping row-display (pass --with-v2 to force)");
 }
 
 // ============================================================
