@@ -7,6 +7,7 @@ pristine-*/
 zcode-patched.tmp.*
 v6*.cjs
 v3*.cjs
+install-3153.ps1
 *-rebuild.cjs
 test-pristine.cjs
 
