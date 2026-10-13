@@ -438,6 +438,68 @@ if (!v7Applied) {
   }
 }
 
+// ============================================================
+// v8:SendMessage 唤醒终态子代理时回填调用级模型
+// ============================================================
+// 背景:调用级 model 只活在 spawn 那一发的 launch options;任务快照
+// (createRuntimeTaskSnapshot)不持久化模型,resumeTerminalAgentInBackground
+// 重建的 resumeRequest 不带任何模型字段——SendMessage 唤醒终态子代理后,
+// 子代理按父会话常驻选择重建模型,v1 的调用级指定失效。
+// 做法:selection 挂在请求对象上(__zCallSel),随快照在进程内持久;
+// resume 时把旧任务的选择回填进 runBackgroundAgent 的 run-opts.callModel,
+// 复用 v1 已验证的解析链(callSelection 优先级:宿主 override > 调用级 > profile)。
+// 边界:跨重启的唤醒不在本期(快照是进程内对象;metadata 重建路径在别的模块)。
+if (src.includes("__zCallSel")) {
+  console.log("v8 already applied — skipping model-persistence-on-resume");
+} else if (!v1Applied && !src.includes(`${VAR}CallModel`)) {
+  console.error("[ABORT] v8 requires v1 (callModel) section");
+  process.exit(1);
+} else {
+  // 8.1 快照构建体带上 __zCallSel:优先输入层(resume 续链用),退回请求对象
+  applyOnce(
+    "v8.snapshot-builder",
+    /(turnId:e\.request\.turnId\}\}function )/,
+    (g) => `__zCallSel:e.__zCallSel??e.request.__zCallSel,${g[1]}`,
+  );
+
+  // 8.2 spawn 请求对象携带 selection(handler 侧;launch→run/start 不剥未知键)
+  applyOnce(
+    "v8.handler-request-stash",
+    new RegExp(`(${VAR}CallModel=\\{selection:rr\\.selection\\}\\}\\};?let (\\w+)=\\{sessionId:)`),
+    (g) => g[1].replace(`let ${g[2]}={sessionId:`, `let ${g[2]}={__zCallSel:${VAR}CallModel?.selection,sessionId:`),
+  );
+
+  // 8.3 resume 重注册快照时继承旧任务的选择(唤醒→再终态→再唤醒不断链)
+  {
+    const re8 = /new Date\((\w+)\.startedAt\),(\w+)=(\w+);(\w+)\.register\(ECn\(\{isBackgrounded:!0,lifecycle:(\w+),request:(\w+),startedAt:(\w+),status:"running"\}\)\)/g;
+    const m8 = [...src.matchAll(re8)];
+    if (m8.length !== 1) {
+      console.error(`[ABORT] v8.resume-snapshot: expected 1 match, got ${m8.length}`);
+      process.exit(1);
+    }
+    const taskVar = m8[0][3];
+    src = src.replace(
+      m8[0][0],
+      m8[0][0].replace(`status:"running"})`, `status:"running",__zCallSel:${taskVar}.__zCallSel})`),
+    );
+
+    // 8.4 resume 调用把旧任务的选择回填进 run-opts.callModel
+    //     (镜像 v1 在 start 路径已验证的透传:xRo 的 run-opts.callModel
+    //      会流进 runExploreAgent 的解析器,callSelection 参与优先级链)
+    const re9 = /((\w+)\((\w+),(\w+),(\w+),(\w+),)\{signal:(\w+)\.signal\},\{resumeFromStore:!0,onSessionReady:/g;
+    const m9 = [...src.matchAll(re9)];
+    if (m9.length !== 1) {
+      console.error(`[ABORT] v8.resume-invoke: expected 1 match, got ${m9.length}`);
+      process.exit(1);
+    }
+    src = src.replace(
+      m9[0][0],
+      `${m9[0][1]}{signal:${m9[0][7]}.signal,...(${taskVar}.__zCallSel?{callModel:{selection:${taskVar}.__zCallSel}}:{})},{resumeFromStore:!0,onSessionReady:`,
+    );
+  }
+  console.log("v8 applied: call-level model persists across SendMessage resume (in-process)");
+}
+
 // ---------- 校验与落盘 ----------
 if (src.length === originalLength) {
   console.log("already up to date — nothing to change");

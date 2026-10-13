@@ -60,5 +60,20 @@ once(`${fnSide.name}-return`,
   `return{root:${rootHelper.name}(e.root,t,${segSide[2]}),panes:{...e.panes,[i]:r},focusedPaneId:i}}`,
   `return{root:__zpaneBalance(${rootHelper.name}(e.root,t,${segSide[2]})),panes:{...e.panes,[i]:r},focusedPaneId:i}}`);
 
+// v2:关闭分屏后整树重平衡。close reducer 摘叶后剩余子树原位上移(不重排),
+// 多格时关一格其余格子面积不等;摘叶结果包一层 __zpaneBalance,与开启路径对称。
+// 形状锚点 auto-detect(混淆名每版会变):workspace-main 守卫 + 摘叶 + delete panes[t]。
+{
+  const closeRe = /function ([\w$]+)\(e,t\)\{if\(t===`workspace-main`\|\|!([\w$]+)\(e\.root,t\)\)return e;let n=([\w$]+)\(e\.root,t\)\?\?([\w$]+),r=\{\.\.\.e\.panes\};return delete r\[t\],\{root:n,panes:r,/g;
+  const cm = [...s.matchAll(closeRe)];
+  if (cm.length !== 1) {
+    console.error(`[ABORT] close-pane reducer: expected exactly 1 match, found ${cm.length}`);
+    process.exit(1);
+  }
+  const m = cm[0];
+  s = s.replace(m[0], m[0].replace("{root:n,panes:r,", "{root:__zpaneBalance(n),panes:r,"));
+  console.log("close-rebalance wired: " + m[1]);
+}
+
 writeFileSync(p, s, "latin1");
 console.log("patched OK:", p, "| size:", s.length);
