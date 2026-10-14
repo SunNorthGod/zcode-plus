@@ -500,6 +500,35 @@ if (src.includes("__zCallSel")) {
   console.log("v8 applied: call-level model persists across SendMessage resume (in-process)");
 }
 
+// ============================================================
+// v9:流中失败恢复判定兜底(providerCode 纳入 + 中转繁忙文案模式)
+// ============================================================
+// 背景:上游(尤其中转)在流中返回自定义限流文案时,错误被分类为
+// retryable=false + reason=unknown;isRetryableStreamRecoveryFailure(u4a)
+// 只查 code/reason/name/message,providerCode 里的 model_rate_limited 不参与
+// 判定 → adapter 不重试、core 流中恢复(10 次预算)也判非瞬态 → 一发死。
+// 实证(7 天 model_usage):138 条零重试暴毙(全部 fin=null):「模型服务暂时
+// 繁忙」死 20、网络断开死 61、服务暂时不可用死 2 等;敏感内容/账号风控类
+// 终态属应死,不在此列。
+// 做法:①瞬态码检查源加入 providerCode(s4a 含 model_rate_limited,命中即瞬态);
+// ②消息模式补中转繁忙类文案与自家流中网络断开文案。配额/敏感内容/风控类
+// 文案不匹配,保持终态;恢复预算仍受 STREAM_RECOVERY_MAX_RETRIES=10 封顶。
+if (src.includes("??LS(t.providerCode)")) {
+  console.log("v9 already applied — skipping stream-recovery transient fallback");
+} else {
+  applyOnce(
+    "v9.provider-code-source",
+    /let o=LS\(t\.code\)\?\?LS\(n\?\.code\);if\(o&&s4a\.has\(o\)\)return!0;/,
+    () => "let o=LS(t.code)??LS(n?.code)??LS(t.providerCode)??LS(n?.providerCode);if(o&&s4a.has(o))return!0;",
+  );
+  applyOnce(
+    "v9.message-pattern",
+    /if\(c&&p4a\(c\)\)return!0/,
+    (g) => g[0] + ";if(c&&/暂时繁忙|稍后重试|服务繁忙|服务器忙|暂时不可用|没有可用节点|network connection failed|rate.?limit|too many requests|overloaded/i.test(c))return!0",
+  );
+  console.log("v9 applied: stream-recovery transient fallback (providerCode + relay busy patterns)");
+}
+
 // ---------- 校验与落盘 ----------
 if (src.length === originalLength) {
   console.log("already up to date — nothing to change");
