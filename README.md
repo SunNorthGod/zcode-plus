@@ -2,7 +2,7 @@
 
 非官方 ZCode Desktop 增强补丁集(Unofficial enhancement patches for ZCode Desktop)。
 
-六大能力:**ToolSearch MCP 无状态网关**(会话零 mcp__ schema,上下文省约 30%)、**子代理调用级选模**(Agent 工具直接指定这次用哪个模型)、**选模跨唤醒持久**(SendMessage 唤醒终态子代理不回落主模型,进程内)、**MCP 开关实时生效**(拨开关下一请求生效)、**分屏严格均分**(新建/关闭均重平衡)、**流中断线兜底**(中转流中限流/繁忙/断连不再一发死,走流中恢复重开,配额与风控类仍终态)。
+六大能力:**McpSearch MCP 无状态网关**(2026-10-19 改名:官方 3.16.1 自带同名 ToolSearch 功能且默认模式下按名过滤,撞名即隐藏,故避让)(会话零 mcp__ schema,上下文省约 30%)、**子代理调用级选模**(Agent 工具直接指定这次用哪个模型)、**选模跨唤醒持久**(SendMessage 唤醒终态子代理不回落主模型,进程内)、**MCP 开关实时生效**(拨开关下一请求生效)、**分屏严格均分**(新建/关闭均重平衡)、**流中断线兜底**(中转流中限流/繁忙/断连不再一发死,走流中恢复重开,配额与风控类仍终态)。
 
 - 本仓库只含补丁脚本,不含任何官方二进制;原版文件请从自己的安装包提取。
 - 与 Z.ai 官方无关,按 MIT 协议开源;修改的是本机安装,自用请自行评估风险。
@@ -12,24 +12,24 @@
 
 ## 功能详述
 
-### 1. ToolSearch —— MCP 无状态网关(v7,旗舰)
+### 1. McpSearch —— MCP 无状态网关(v7,旗舰)
 
 **为什么做**:ZCode 把所有已启用 MCP server 的工具 schema 全量塞进每个会话的系统提示。本机实测(60+ 服务器实例、656 个工具):MCP schema 占首发请求约 **30% 上下文**,且随对话常驻。对比之下,几百个技能的目录只占 ~0.2%——因为技能走「目录 + 用时展开」两段披露,工具却是单段全量披露。
 
-**v7 的形态**(v6 按需装卸的换代,装卸本身也被证明对小模型是元认知负担,已移除):`mcp__` 工具**永远不注册**;会话只多一个无状态的 `ToolSearch` 网关,三个只读动词 + 一个透传动词,工具面从出生到死亡恒定不变:
+**v7 的形态**(v6 按需装卸的换代,装卸本身也被证明对小模型是元认知负担,已移除):`mcp__` 工具**永远不注册**;会话只多一个无状态的 `McpSearch` 网关,三个只读动词 + 一个透传动词,工具面从出生到死亡恒定不变:
 
 | 调用 | 行为 |
 |---|---|
-| `ToolSearch {}` | 全目录:一行一工具 `server/tool: 描述`,超预算降级为按服务器分组 |
-| `ToolSearch {query:"ida"}` | 关键词过滤目录;搜索面**仅 server/tool 名**(描述文本不参与匹配,杜绝子串劫持),OR 计分,部分命中也返回 |
-| `ToolSearch {tool:"ida/decompile"}` | inspect:返回该工具的完整参数 schema 与描述 |
-| `ToolSearch {tool:"ida/decompile", args:{...}}` | execute:真正执行,结果转文本返回 |
+| `McpSearch {}` | 全目录:一行一工具 `server/tool: 描述`,超预算降级为按服务器分组 |
+| `McpSearch {query:"ida"}` | 关键词过滤目录;搜索面**仅 server/tool 名**(描述文本不参与匹配,杜绝子串劫持),OR 计分,部分命中也返回 |
+| `McpSearch {tool:"ida/decompile"}` | inspect:返回该工具的完整参数 schema 与描述 |
+| `McpSearch {tool:"ida/decompile", args:{...}}` | execute:真正执行,结果转文本返回 |
 
 与 skill 的同构性:目录=skill 列表,inspect=skill 展开内容,execute=按 skill 指令干活。**没有任何调用改变工具面**:零加载、零卸载、零重注册,前缀缓存不被 MCP 打断;compact/resume 后零恢复成本——历史里的网关调用天然自解释,不存在「加载状态丢失」。
 
 **原理**:
 1. 两处注册点(`registerMcpTools` 首注册 / `refreshMcpToolsIfChanged` 重注册)的入参直接置空——mcp 工具一个不进注册表;
-2. 挂一个 `ToolSearch` 内建工具(克隆现有工具条目继承策略字段,input/output schema 与 handler 返回形状严格匹配);
+2. 挂一个 `McpSearch` 内建工具(克隆现有工具条目继承策略字段,input/output schema 与 handler 返回形状严格匹配);
 3. execute 路径**临场构造 vendor 的 `createMcpToolEntry` 结果但从不注册**,直接调用其 handler——权限声明、审批触发、结果预算、超时、trace、图像/内容格式化全部复用 vendor 原装实现,零复刻;
 4. 网关内等价复刻 `registerMcpTools` 的 allowedTools/disallowedTools 白名单语义(受限 agent 场景照常受限),被禁工具直接拒绝。
 
@@ -97,7 +97,7 @@ swap-asar.cmd
 # 打补丁(目录可写则直接换入;不可写则落到 %TEMP%,再跑 swap.cmd 提权换入)
 node apply-model-param-patch.mjs "C:\Program Files\ZCode\resources\glm\zcode.cjs"
 
-# 可选:跑 v7 回归验证(vm 里实跑 ToolSearch 目录/inspect/execute/白名单/零服务器九种形态 + 括号平衡)
+# 可选:跑 v7 回归验证(vm 里实跑 McpSearch 目录/inspect/execute/白名单/零服务器九种形态 + 括号平衡)
 node verify-v7.mjs
 
 # 完全退出并重启 ZCode

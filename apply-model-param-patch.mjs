@@ -314,7 +314,7 @@ if (!v4Applied) {
       src = src.replace(`async function ${kfo}(${trace}){`, `async function ${kfo}(${trace}){` + HELPER);
       src = src.replace(gateOld, `if(this.mcpToolsRegistered)return __zcodeMcpSync.call(this,${trace});`);
       // KFo catch 强化:①失败不锁死 mcpToolsRegistered(原版一次失败永久禁注册,
-      // v4/v6 下表现为整会话无 MCP 无 ToolSearch);②error 带堆栈落日志便于定位
+      // v4/v6 下表现为整会话无 MCP 无 McpSearch);②error 带堆栈落日志便于定位
       const catchRe = new RegExp(`catch\\(([\\w$]+)\\)\\{this\\.mcpToolsRegistered=!0,this\\.logger\\?\\.warn\\("MCP initialization failed",\\{\\.\\.\\.Sr\\(${trace}\\),error:\\1 instanceof Error\\?\\1\\.message:String\\(\\1\\),event:"mcp\\.initialization\\.failed",module:"core\\.runtime",status:"failed"\\}\\)\\}`);
       if (!catchRe.test(src)) {
         console.error("[WARN] v4: KFo catch anchor missing — init-failure lock not removed");
@@ -334,10 +334,14 @@ if (!v4Applied) {
 }
 
 // ============================================================
-// v7:MCP 无状态网关(ToolSearch——skill 式两段披露,无装卸)
+// v7:MCP 无状态网关(McpSearch——skill 式两段披露,无装卸)
+// 改名缘由(2026-10-19,3.16.1):官方自带同名 ToolSearch 功能(toolSearchMode,默认 off),
+// 且 getTools 过滤器在 mode=off 时按名剥除 "ToolSearch"/"DeferredToolCall"
+// (原意是功能没开就藏自家工具),撞名的本网关被一并静默隐藏。McpSearch 不踩任何
+// 官方按名过滤器,官方模式无论开关都互不干扰。
 // ============================================================
 // 会话出生不注册任何 mcp__ 工具 Schema(上下文省掉大头),mcp__ 工具
-// 永远不注册。ToolSearch 是无状态网关,三个只读动词 + 一个透传动词:
+// 永远不注册。McpSearch 是无状态网关,三个只读动词 + 一个透传动词:
 //   {}                    → 全目录(一行一工具,超预算降级服务器分组)
 //   {query:"ida"}         → 关键词过滤目录(OR 计分,搜索面仅 server/tool 名)
 //   {tool:"ida/decompile"} → 返回该工具的完整 inputSchema 与描述
@@ -375,10 +379,10 @@ if (!v7Applied) {
         `return {capability:P.capability,` +
         `inputSchema:{type:"object",properties:{query:{type:"string",description:"Optional. Filter the catalog: keywords against server/tool names only (e.g. 'ida', 'decompile'). Omit to see the full catalog."},tool:{type:"string",description:"Optional. 'serverName/toolName' to inspect (returns its full parameter schema and description) or to execute. Use the exact names shown in the catalog."},args:{type:"object",description:"Optional. Arguments object for the tool being executed. Provide together with 'tool'. Get the expected parameters from an inspect call first.",additionalProperties:true}},required:[]},` +
         `outputSchema:{$schema:"http://json-schema.org/draft-07/schema#",type:"object",properties:{summary:{type:"string"},tools:{type:"array",items:{type:"string"}}},required:["summary"]},` +
-        `permission:{permission:"mcp",reason:"MCP gateway ToolSearch executes tools on external MCP servers",riskLevel:"medium",sideEffectScope:"network",needsApproval:!0,patternSources:["toolName","input","network"],denyPriority:"beforeAsk"},` +
+        `permission:{permission:"mcp",reason:"MCP gateway McpSearch executes tools on external MCP servers",riskLevel:"medium",sideEffectScope:"network",needsApproval:!0,patternSources:["toolName","input","network"],denyPriority:"beforeAsk"},` +
         `resultBudget:{maxInlineBytes:1e5,maxModelBytes:5e4,strategy:"truncate",preview:{direction:"head"}},timeout:P.timeout,cancellation:P.cancellation,trace:P.trace,` +
-        `metadata:{...P.metadata,name:"ToolSearch",readOnly:!1,destructive:!1,concurrentSafe:!0,needsApproval:!1,sideEffectScope:"network",` +
-        `description:"Gateway to MCP tools (tools from external MCP servers ONLY). Core built-in tools (Read, Grep, Glob, Bash, Edit, Write, TodoWrite, Agent, ...) are ALWAYS directly available - never use this gateway for them. MCP tools are NOT listed in your tools. FIRST call without arguments to see the full catalog (one line per MCP tool). Then: ToolSearch {tool:'server/tool'} inspects that tool (returns its parameter schema), and ToolSearch {tool:'server/tool', args:{...}} executes it. All three are read-only catalog/inspect, execute runs the real tool. Nothing is loaded or unloaded - the gateway is stateless, your tool list never changes."},` +
+        `metadata:{...P.metadata,name:"McpSearch",readOnly:!1,destructive:!1,concurrentSafe:!0,needsApproval:!1,sideEffectScope:"network",` +
+        `description:"Gateway to MCP tools (tools from external MCP servers ONLY). Core built-in tools (Read, Grep, Glob, Bash, Edit, Write, TodoWrite, Agent, ...) are ALWAYS directly available - never use this gateway for them. MCP tools are NOT listed in your tools. FIRST call without arguments to see the full catalog (one line per MCP tool). Then: McpSearch {tool:'server/tool'} inspects that tool (returns its parameter schema), and McpSearch {tool:'server/tool', args:{...}} executes it. All three are read-only catalog/inspect, execute runs the real tool. Nothing is loaded or unloaded - the gateway is stateless, your tool list never changes."},` +
         `handler:async(i,c)=>{let port=rt.mcpPort;if(!port)return{summary:"MCP is not available in this session."};` +
         `let all;try{all=await port.listTools()}catch(err){return{summary:"MCP tool list unavailable: "+(err&&err.message||err)}}` +
         `if(!all.length)return{summary:"No MCP servers are connected in this session."};` +
@@ -387,7 +391,7 @@ if (!v7Applied) {
         `if(toolSpec){let slash=toolSpec.indexOf("/");let sName=slash>0?toolSpec.slice(0,slash):toolSpec,tName=slash>0?toolSpec.slice(slash+1):"";` +
         `if(!tName)return{summary:"Bad tool reference '"+toolSpec+"'. Use 'serverName/toolName' exactly as shown in the catalog."};` +
         `let t=all.find(x=>x.serverName===sName&&x.toolName===tName);` +
-        `if(!t){let near=all.filter(x=>x.serverName===sName||x.toolName===tName).map(x=>x.serverName+"/"+x.toolName).slice(0,5);return{summary:"No such MCP tool: '"+toolSpec+"'."+(near.length?" Closest: "+near.join(", ")+"":" Call ToolSearch with no arguments to see the full catalog.")}}` +
+        `if(!t){let near=all.filter(x=>x.serverName===sName||x.toolName===tName).map(x=>x.serverName+"/"+x.toolName).slice(0,5);return{summary:"No such MCP tool: '"+toolSpec+"'."+(near.length?" Closest: "+near.join(", ")+"":" Call McpSearch with no arguments to see the full catalog.")}}` +
         // 白名单复刻(与 $bt 同源语义,逐字对齐 vendor 形态):
         //   注册名 = aD(descriptor) = "mcp__"+N8(server)+"__"+N8(tool)(CUA 特例走 kOa)
         //   allowed/disallowed 集条目经 f3e 规范化(jDa 去参数后 f3e,f3e 只做别名归一)
@@ -408,10 +412,10 @@ if (!v7Applied) {
         `let byS={};for(const t of all){(byS[t.serverName]=byS[t.serverName]||[]).push(t.toolName)}` +
         `let picks;` +
         `if(!q)picks=all;else{let toks=q.toLowerCase().split(/\\s+/).filter(Boolean);picks=all.map(t=>{let hay=(t.serverName+" "+t.toolName).toLowerCase(),sc=0,miss=0;for(const k of toks){let n=hay.split(k).length-1;if(n===0)miss++;sc+=n}return{t,sc,miss}}).filter(x=>x.sc>0).sort((a,b)=>a.miss-b.miss||b.sc-a.sc).map(x=>x.t)}` +
-        `if(picks.length===0)return{summary:"No MCP tool matches '"+q+"'. Call ToolSearch with no arguments to see the full catalog, then retry with a server name or tool name from it."};` +
+        `if(picks.length===0)return{summary:"No MCP tool matches '"+q+"'. Call McpSearch with no arguments to see the full catalog, then retry with a server name or tool name from it."};` +
         `let lines=picks.map(t=>"- "+t.serverName+"/"+t.toolName+": "+String(t.description||"").replace(/\\s+/g," ").slice(0,80)).join("\\n");` +
         `if(lines.length>24000){lines=Object.entries(byS).filter(e2=>picks.some(t=>t.serverName===e2[0])).map(e2=>"- "+e2[0]+" ("+e2[1].length+" tools): "+e2[1].join(", ")).join("\\n");if(lines.length>24000)lines=Object.entries(byS).filter(e2=>picks.some(t=>t.serverName===e2[0])).map(e2=>"- "+e2[0]+" ("+e2[1].length+" tools)").join("\\n")}` +
-        `return{summary:"MCP tool catalog ("+picks.length+" of "+all.length+" tools, "+Object.keys(byS).length+" servers) - inspect with ToolSearch {tool:'server/tool'}, execute with ToolSearch {tool:'server/tool', args:{...}}:",tools:lines.split("\\n")}}}}`;
+        `return{summary:"MCP tool catalog ("+picks.length+" of "+all.length+" tools, "+Object.keys(byS).length+" servers) - inspect with McpSearch {tool:'server/tool'}, execute with McpSearch {tool:'server/tool', args:{...}}:",tools:lines.split("\\n")}}}}`;
       // 1) 注入工厂(KFo 之前,模块作用域,UCn/$bt 均可见)
       src = src.replace(`async function ${mInit[1]}(e){async function __zcodeMcpSync`,
         FACTORY + `async function ${mInit[1]}(e){async function __zcodeMcpSync`);
@@ -420,23 +424,23 @@ if (!v7Applied) {
         `${regK[2]}(this.registry,${regK[3]},[],{allowedTools:this.config.toolAllowlist`);
       src = src.replace(`${regX[2]}(this.registry,${regX[3]},${regX[4]},{allowedTools:this.config.toolAllowlist`,
         `${regX[2]}(this.registry,${regX[3]},[],{allowedTools:this.config.toolAllowlist`);
-      // 3) 首次注册路径:挂网关本体(注册列表为空,只挂 ToolSearch)
+      // 3) 首次注册路径:挂网关本体(注册列表为空,只挂 McpSearch)
       src = src.replace(sigRec[1] + `this.logger?.info("MCP tools registered"`,
         sigRec[1] + `(this.__zcodeMcpSearchEntryObj=__zcodeMcpSearchEntry(this))&&this.registry.register(this.__zcodeMcpSearchEntryObj),this.invalidateToolCache(),this.logger?.info("MCP tools registered"`);
       // 4) v4 助手头部兜底创建(注册路径未走到时)
       src = src.replace(/async function __zcodeMcpSync\((\w)\)\{/,
         `async function __zcodeMcpSync($1){if(!this.__zcodeMcpSearchEntryObj){try{let se=__zcodeMcpSearchEntry(this);se&&this.registry.register(se),this.invalidateToolCache()}catch(i){}}`);
-      // 5) UI 行标题:createToolResultDisplay 头部插 ToolSearch 分支 —
+      // 5) UI 行标题:createToolResultDisplay 头部插 McpSearch 分支 —
       //    网关 execute 返回值带 mcpDisplay{serverName,toolName},转成 vendor 的
       //    mcp_tool display 形态(Pie 同款),UI 行标题即显示实际执行的 server/tool
       const sgtHeadOld = `function ${sgt}(e,t,n){if(e==="Bash")`;
-      const sgtHeadNew = `function ${sgt}(e,t,n){if(e==="ToolSearch"&&t&&typeof t.mcpDisplay=="object"){let d=${pie}({...t.mcpDisplay,description:t.summary},t);if(d)return d}if(e==="Bash")`;
+      const sgtHeadNew = `function ${sgt}(e,t,n){if(e==="McpSearch"&&t&&typeof t.mcpDisplay=="object"){let d=${pie}({...t.mcpDisplay,description:t.summary},t);if(d)return d}if(e==="Bash")`;
       if (src.split(sgtHeadOld).length - 1 !== 1) {
-        console.error("[WARN] v7: createToolResultDisplay anchor mismatch — UI row title will stay 'ToolSearch'");
+        console.error("[WARN] v7: createToolResultDisplay anchor mismatch — UI row title will stay 'McpSearch'");
       } else {
         src = src.replace(sgtHeadOld, sgtHeadNew);
       }
-      console.log("v7 applied: ToolSearch stateless MCP gateway wired (catalog/inspect/execute, zero load/unload)");
+      console.log("v7 applied: McpSearch stateless MCP gateway wired (catalog/inspect/execute, zero load/unload)");
     }
   }
 }

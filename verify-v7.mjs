@@ -1,4 +1,4 @@
-// v7 ToolSearch 无状态网关回归:node verify-v7.mjs [bundle 路径,默认已装 zcode.cjs]
+// v7 McpSearch 无状态网关回归:node verify-v7.mjs [bundle 路径,默认已装 zcode.cjs]
 // 覆盖:entry 创建、outputSchema、handler 六种返回形态(catalog/keyword-filter/
 // inspect/execute/blocked-by-allowlist/zero-server)与 UCn execute 路径。
 import { readFileSync } from "node:fs";
