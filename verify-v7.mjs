@@ -6,10 +6,13 @@ import vm from "node:vm";
 
 const target = process.argv[2] ?? "C:/Program Files/ZCode/resources/glm/zcode.cjs";
 const all = readFileSync(target, "utf8");
-const L = all.split("\n")[14627];
+// initializeMcp 函数名每版改名(KFo→E8o),行号亦随版本漂移,两者动态定位
+const initFn = (all.match(/\(([\w$]+),"initializeMcp"\)/) || [])[1];
+if (!initFn) { console.error("initializeMcp anchor missing"); process.exit(1); }
+const L = all.split("\n").find((l) => l.includes("function __zcodeMcpSearchEntry(rt){") && l.includes(`async function ${initFn}(e){`));
+if (!L) { console.error("anchors missing"); process.exit(1); }
 const iF = L.indexOf("function __zcodeMcpSearchEntry(rt){");
-const iK = L.indexOf("async function KFo(e){");
-if (iF < 0 || iK < 0) { console.error("anchors missing"); process.exit(1); }
+const iK = L.indexOf(`async function ${initFn}(e){`);
 const code = L.slice(iF, iK);
 
 // 1) 括号机械平衡

@@ -7,7 +7,8 @@ pristine-*/
 zcode-patched.tmp.*
 v6*.cjs
 v3*.cjs
-install-3153.ps1
+install-*.ps1
+asar-work/
 *-rebuild.cjs
 test-pristine.cjs
 
@@ -17,3 +18,4 @@ node_modules/
 *.log
 .DS_Store
 Thumbs.db
+install3161-*.txt

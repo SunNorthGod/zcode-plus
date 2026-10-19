@@ -4,8 +4,12 @@ import vm from "node:vm";
 
 const target = process.argv[2] || "v7.cjs";
 const all = readFileSync(target, "utf8");
-const L = all.split("\n")[14627];
-const code = L.slice(L.indexOf("function __zcodeMcpSearchEntry(rt){"), L.indexOf("async function KFo(e){"));
+// initializeMcp 函数名每版改名,行号随版本漂移,动态定位
+const initFn = (all.match(/\(([\w$]+),"initializeMcp"\)/) || [])[1];
+if (!initFn) { console.error("initializeMcp anchor missing"); process.exit(1); }
+const L = all.split("\n").find((l) => l.includes("function __zcodeMcpSearchEntry(rt){") && l.includes(`async function ${initFn}(e){`));
+if (!L) { console.error("anchors missing"); process.exit(1); }
+const code = L.slice(L.indexOf("function __zcodeMcpSearchEntry(rt){"), L.indexOf(`async function ${initFn}(e){`));
 
 function extractFn(name) {
   const lines = all.split("\n");

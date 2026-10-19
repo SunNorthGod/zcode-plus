@@ -80,10 +80,10 @@ function applyN(name, pattern, expected, makeReplacement) {
 // v1(调用级 model 参数)已应用过则整体跳过,只执行 v2(行显示模型)步骤。
 const v1Applied = src.includes(VAR + "CallModel");
 if (!v1Applied) {
-const hb = src.match(/async\((\w+),(\w+)\)=>\{let (\w+)=(\w+)\.parse\(\1\),\w+=\3\.subagent_type\?\?\w+\.GeneralPurpose/);
+const hb = src.match(/async\(([\w$]+),([\w$]+)\)=>\{let ([\w$]+)=([\w$]+)\.parse\(\1\),[\w$]+=\3\.subagent_type\?\?[\w$]+\.GeneralPurpose/);
 if (!hb) { console.error("[ABORT] handler structure not found"); process.exit(1); }
 const [, hIn, hCtx, hParsed] = hb;
-const he = src.match(new RegExp(`throw (\\w+)\\((\\w+)\\.ConfigurationError,"SubagentPort is not configured for Agent tool"`));
+const he = src.match(new RegExp(`throw ([\\w$]+)\\(([\\w$]+)\\.ConfigurationError,"SubagentPort is not configured for Agent tool"`));
 if (!he) { console.error("[ABORT] handler error bindings not found"); process.exit(1); }
 const [, hErr, hErrType] = he;
 if (src.includes(VAR + "CallModel") || src.includes(VAR + "ResolveModelRef") || src.includes(VAR + "CallSel")) {
@@ -93,7 +93,7 @@ if (src.includes(VAR + "CallModel") || src.includes(VAR + "ResolveModelRef") || 
 // ---------- 1. AgentInputSchema:插入 model 参数 ----------
 applyOnce(
   "schema.model-param",
-  /(subagent_type:(\w+)\.string\(\)\.optional\(\)\.describe\("The type of specialized agent to use for this task"\),)/,
+  /(subagent_type:([\w$]+)\.string\(\)\.optional\(\)\.describe\("The type of specialized agent to use for this task"\),)/,
   (g) => g[1] +
     `model:${g[2]}.string().optional().describe("Model for the subagents (providerId/modelId, a bare modelId when unambiguous, optional $reasoning suffix). Resolved against this host's live model catalog at call time, including custom providers; an unknown name fails with the available list. Omit to let the agent's profile/settings decide."),`,
 );
@@ -101,7 +101,7 @@ applyOnce(
 // ---------- 2. agentHandler:解析 model → callModel,并传入 launch options ----------
 {
   const m2 = src.match(new RegExp(
-    `"SubagentPort is not configured for Agent tool",\\{context:\\{code:\\w+\\.SUBAGENT_UNAVAILABLE,toolCallId:${hCtx}\\.toolCallId,toolName:"Agent"\\},recoverable:!1\\}\\);let \\w+=\\{sessionId:`,
+    `"SubagentPort is not configured for Agent tool",\\{context:\\{code:[\\w$]+\\.SUBAGENT_UNAVAILABLE,toolCallId:${hCtx}\\.toolCallId,toolName:"Agent"\\},recoverable:!1\\}\\);let [\\w$]+=\\{sessionId:`,
   ));
   if (!m2) { console.error("[ABORT] handler inject-point not found"); process.exit(1); }
 
@@ -117,13 +117,13 @@ applyOnce(
 
   applyOnce(
     "handler.inject-resolution",
-    new RegExp(`("SubagentPort is not configured for Agent tool",\\{context:\\{code:\\w+\\.SUBAGENT_UNAVAILABLE,toolCallId:${hCtx}\\.toolCallId,toolName:"Agent"\\},recoverable:!1\\}\\);)(let \\w+=\\{sessionId:)`),
+    new RegExp(`("SubagentPort is not configured for Agent tool",\\{context:\\{code:[\\w$]+\\.SUBAGENT_UNAVAILABLE,toolCallId:${hCtx}\\.toolCallId,toolName:"Agent"\\},recoverable:!1\\}\\);)(let [\\w$]+=\\{sessionId:)`),
     (g) => g[1] + inject + g[2],
   );
 
   applyOnce(
     "handler.launch-options",
-    /(\.\.\.(\w+)\.subagentModelOverride\?\{modelOverride:\2\.subagentModelOverride\}:\{\})(?=\}\))/,
+    /(\.\.\.([\w$]+)\.subagentModelOverride\?\{modelOverride:\2\.subagentModelOverride\}:\{\})(?=\}\))/,
     (g) => g[1] + `,callModel:${VAR}CallModel`,
   );
 }
@@ -131,33 +131,36 @@ applyOnce(
 // ---------- 3. runner launch():后台分支透传 callModel 到 start ----------
 applyOnce(
   "runner.launch.start-options",
-  /(return \w+\.start\(\w+,\{signal:\w+\?\.signal,\.\.\.(\w+)\?\.model\?\{model:\2\.model\}:\{\})(?=\})/,
+  // 3.16.1 起官方在 model spread 后追加 modelOverride spread,锚点改看逗号续 spread
+  /(return [\w$]+\.start\([\w$]+,\{signal:[\w$]+\?\.signal,\.\.\.([\w$]+)\?\.model\?\{model:\2\.model\}:\{\})(?=,\.\.\.)/,
   (g) => g[1] + `,callModel:${g[2]}?.callModel`,
 );
 
 // ---------- 4. runner run():runAgentToCompletion 子集透传 ----------
 applyOnce(
   "runner.run.subset",
-  /(\.\.\.(\w+)\?\.modelOverride\?\{modelOverride:\2\.modelOverride\}:\{\})(?=\})/,
+  // 3.16.1 起三处 runner 路径都有 modelOverride spread,用后续参数区分 run(带 reportActivity)
+  /(\.\.\.([\w$]+)\?\.modelOverride\?\{modelOverride:\2\.modelOverride\}:\{\})(?=\},\{reportActivity:)/,
   (g) => g[1] + `,callModel:${g[2]}?.callModel`,
 );
 
 // ---------- 5. runner start():runBackgroundAgent 子集透传 ----------
 applyOnce(
   "runner.start.subset",
-  /(\{signal:\w+\.signal,\.\.\.(\w+)\?\.model\?\{model:\2\.model\}:\{\})(?=\},\{onSessionReady:)/,
+  // 3.16.1 起该处 options 带官方 model/modelOverride 透传,锚点挂 modelOverride spread(后随 onSessionReady 参数区分)
+  /(\.\.\.([\w$]+)\?\.modelOverride\?\{modelOverride:\2\.modelOverride\}:\{\})(?=\},\{onSessionReady:)/,
   (g) => g[1] + `,callModel:${g[2]}?.callModel`,
 );
 
 // ---------- 6. runExploreAgent:callSelection 进解析器 + 抑制继承 ----------
 applyOnce(
   "explore.overrideSelection",
-  /(overrideSelection:(\w+)\?\.modelOverride\?\.selection,)(resolveSelection:)/,
+  /(overrideSelection:([\w$]+)\?\.modelOverride\?\.selection,)(resolveSelection:)/,
   (g) => g[1] + `callSelection:${g[2]}?.callModel?.selection,` + g[3],
 );
 applyOnce(
   "explore.inherit-suppress",
-  /(=(\w+)\?\.modelOverride,)(\w+)=!(\w+)&&!(\w+)\?(\w+)\?\.model:void 0/,
+  /(=([\w$]+)\?\.modelOverride,)([\w$]+)=!([\w$]+)&&!([\w$]+)\?([\w$]+)\?\.model:void 0/,
   (g) => {
     if (g[6] !== g[2]) { console.error("[ABORT] explore.inherit-suppress: var mismatch"); process.exit(1); }
     return g[1] + g[3] + "=!" + g[4] + "&&!" + g[2] + "?.callModel&&!" + g[5] + "?" + g[6] + "?.model:void 0";
@@ -169,13 +172,13 @@ applyOnce(
   // 函数头注入 const __zcodePatchCallSel = <param>.callSelection;
   applyOnce(
     "selection.fn-head",
-    /function (\w+)\((\w+)\)\{let (\w+)=\2\.profileSelection,/,
+    /function ([\w$]+)\(([\w$]+)\)\{let ([\w$]+)=\2\.profileSelection,/,
     (g) => `function ${g[1]}(${g[2]}){const ${VAR}CallSel=${g[2]}.callSelection;let ${g[3]}=${g[2]}.profileSelection,`,
   );
   // 优先级链:override ? A : [插入 callSel ? B] : profile ? C : parent
   applyOnce(
     "selection.callSelection-branch",
-    /=\w+\.overrideSelection\?\{effectiveSelection:\w+\.overrideSelection\}:(\w+)\?(\w+\.resolveSelection)\?(\w+\.resolveSelection)\((\w+)\((\w+)\)\):\{effectiveSelection:\1\}/,
+    /=[\w$]+\.overrideSelection\?\{effectiveSelection:[\w$]+\.overrideSelection\}:([\w$]+)\?([\w$]+\.resolveSelection)\?([\w$]+\.resolveSelection)\(([\w$]+)\(([\w$]+)\)\):\{effectiveSelection:\1\}/,
     (g) => {
       const [, profileVar, cond, call, cloneFn, argVar] = g;
       if (argVar !== profileVar) { console.error("[ABORT] selection.callSelection-branch: var mismatch"); process.exit(1); }
@@ -188,7 +191,7 @@ applyOnce(
   // 错误信息里的 requested 链带上 callSelection
   applyOnce(
     "selection.error-chain",
-    /=(\w+)\.overrideSelection\?\?(\w+\?\?\w+\.parentSelection)/,
+    /=([\w$]+)\.overrideSelection\?\?([\w$]+\?\?[\w$]+\.parentSelection)/,
     (g) => `=${g[1]}.overrideSelection??${VAR}CallSel??${g[2]}`,
   );
 }
@@ -225,7 +228,7 @@ if (!v2Applied) {
 // --- v2.1 两处 SubagentSpawned 事件的 description 追加模型后缀 ---
 applyN(
   "v2.spawn-emission",
-  /description:(\w+)\.description,prompt:(\w+)\.prompt,parentToolCallId:\2\.parentToolCallId,status:"running",allowedTools:/,
+  /description:([\w$]+)\.description,prompt:([\w$]+)\.prompt,parentToolCallId:\2\.parentToolCallId,status:"running",allowedTools:/,
   2,
   (g) => {
     const req = g[1];
@@ -241,7 +244,7 @@ applyN(
 // 用 background 字段精确定位事件镜像这一处。
 applyN(
   "v2.mirror-description",
-  /(agentType:(\w+)\.agentType,background:\2\.background,childSessionId:\2\.sessionId,)description:\2\.description,(parentSessionId:this\.sessionId)/,
+  /(agentType:([\w$]+)\.agentType,background:\2\.background,childSessionId:\2\.sessionId,)description:\2\.description,(parentSessionId:this\.sessionId)/,
   1,
   (g) => g[1] + `description:${g[2]}.description+(${chainExplore}?" \\u00b7 "+${chainExplore}:""),` + g[3],
 );
@@ -261,7 +264,7 @@ const v3Applied = src.includes("!/claude/i.test(");
 if (!v3Applied) {
   applyOnce(
     "v3.todo-reminder-skip",
-    /(\w+)\.some\((\w+)=>\2\.name==="TodoWrite"\)&&(\w+)\((\w+)\.turnRequestState\.entries\)/,
+    /([\w$]+)\.some\(([\w$]+)=>\2\.name==="TodoWrite"\)&&([\w$]+)\(([\w$]+)\.turnRequestState\.entries\)/,
     (g) => g[0] + `&&!/claude/i.test(${g[4]}.model&&${g[4]}.model.modelId)`,
   );
 } else {
@@ -284,7 +287,7 @@ if (!v4Applied) {
   const mInit = src.match(/\(([\w$]+),"initializeMcp"\)/);
   const mRef = src.match(/\(([\w$]+),"refreshMcpToolsIfChanged"\)/);
   const head = mInit && mRef
-    ? src.match(new RegExp(`async function ${mInit[1]}\\((\\w+)\\)\\{if\\(this\\.mcpToolsRegistered\\)return;`))
+    ? src.match(new RegExp(`async function ${mInit[1]}\\(([\\w$]+)\\)\\{if\\(this\\.mcpToolsRegistered\\)return;`))
     : null;
   if (!mInit || !mRef || !head) {
     console.error("[WARN] v4: anchors missing/changed (initializeMcp / refreshMcpToolsIfChanged) — skipping mcp-live patch");
@@ -312,7 +315,7 @@ if (!v4Applied) {
       src = src.replace(gateOld, `if(this.mcpToolsRegistered)return __zcodeMcpSync.call(this,${trace});`);
       // KFo catch 强化:①失败不锁死 mcpToolsRegistered(原版一次失败永久禁注册,
       // v4/v6 下表现为整会话无 MCP 无 ToolSearch);②error 带堆栈落日志便于定位
-      const catchRe = new RegExp(`catch\\((\\w+)\\)\\{this\\.mcpToolsRegistered=!0,this\\.logger\\?\\.warn\\("MCP initialization failed",\\{\\.\\.\\.Sr\\(${trace}\\),error:\\1 instanceof Error\\?\\1\\.message:String\\(\\1\\),event:"mcp\\.initialization\\.failed",module:"core\\.runtime",status:"failed"\\}\\)\\}`);
+      const catchRe = new RegExp(`catch\\(([\\w$]+)\\)\\{this\\.mcpToolsRegistered=!0,this\\.logger\\?\\.warn\\("MCP initialization failed",\\{\\.\\.\\.Sr\\(${trace}\\),error:\\1 instanceof Error\\?\\1\\.message:String\\(\\1\\),event:"mcp\\.initialization\\.failed",module:"core\\.runtime",status:"failed"\\}\\)\\}`);
       if (!catchRe.test(src)) {
         console.error("[WARN] v4: KFo catch anchor missing — init-failure lock not removed");
       } else {
@@ -355,7 +358,7 @@ if (!v7Applied) {
   } else {
       const regK = src.match(/([\w$]+)=([\w$]+)\(this\.registry,([\w$]+),([\w$]+)\.tools,\{allowedTools:this\.config\.toolAllowlist/);
       const regX = src.match(/([\w$]+)=([\w$]+)\(this\.registry,([\w$]+),([\w$]+),\{allowedTools:this\.config\.toolAllowlist/);
-      const sigRec = src.match(/(this\.__zcodeMcpSrvSig=Object\.keys\((\w+)\.statuses\?\?\{\}\)\.sort\(\)\.join\(.{1,6}?\),)/);
+      const sigRec = src.match(/(this\.__zcodeMcpSrvSig=Object\.keys\(([\w$]+)\.statuses\?\?\{\}\)\.sort\(\)\.join\(.{1,6}?\),)/);
       // vendor 名捕获:注册名构造(aD=toMcpToolName)、规范化(f3e=normalizeToolNameAlias)、
       // CUA 特例名(kOa=toRegisteredMcpToolName)
       const mA = src.match(/\(([\w$]+),"toMcpToolName"\)/);
@@ -465,13 +468,16 @@ if (src.includes("__zCallSel")) {
   // 8.2 spawn 请求对象携带 selection(handler 侧;launch→run/start 不剥未知键)
   applyOnce(
     "v8.handler-request-stash",
-    new RegExp(`(${VAR}CallModel=\\{selection:rr\\.selection\\}\\}\\};?let (\\w+)=\\{sessionId:)`),
+    new RegExp(`(${VAR}CallModel=\\{selection:rr\\.selection\\}\\}\\};?let ([\\w$]+)=\\{sessionId:)`),
     (g) => g[1].replace(`let ${g[2]}={sessionId:`, `let ${g[2]}={__zCallSel:${VAR}CallModel?.selection,sessionId:`),
   );
 
   // 8.3 resume 重注册快照时继承旧任务的选择(唤醒→再终态→再唤醒不断链)
   {
-    const re8 = /new Date\((\w+)\.startedAt\),(\w+)=(\w+);(\w+)\.register\(ECn\(\{isBackgrounded:!0,lifecycle:(\w+),request:(\w+),startedAt:(\w+),status:"running"\}\)\)/g;
+    // 快照构建体 keepName 每版改名(ECn→MPn),经 r(X,"createRuntimeTaskSnapshot") 动态捕获
+    const snapFn = (src.match(/\(([\w$]+),"createRuntimeTaskSnapshot"\)/) || [])[1];
+    if (!snapFn) { console.error("[ABORT] v8: createRuntimeTaskSnapshot keepName not found"); process.exit(1); }
+    const re8 = new RegExp(`new Date\\(([\\w$]+)\\.startedAt\\),([\\w$]+)=([\\w$]+);([\\w$]+)\\.register\\(${snapFn}\\(\\{isBackgrounded:!0,lifecycle:([\\w$]+),request:([\\w$]+),startedAt:([\\w$]+),status:"running"\\}\\)\\)`, "g");
     const m8 = [...src.matchAll(re8)];
     if (m8.length !== 1) {
       console.error(`[ABORT] v8.resume-snapshot: expected 1 match, got ${m8.length}`);
@@ -486,7 +492,8 @@ if (src.includes("__zCallSel")) {
     // 8.4 resume 调用把旧任务的选择回填进 run-opts.callModel
     //     (镜像 v1 在 start 路径已验证的透传:xRo 的 run-opts.callModel
     //      会流进 runExploreAgent 的解析器,callSelection 参与优先级链)
-    const re9 = /((\w+)\((\w+),(\w+),(\w+),(\w+),)\{signal:(\w+)\.signal\},\{resumeFromStore:!0,onSessionReady:/g;
+    // 3.16.1 起 resume 调用带官方 model/modelOverride 透传(u 为空时是 no-op,与 callModel 回填不冲突)
+    const re9 = /([\w$]+\([\w$]+,[\w$]+,[\w$]+,[\w$]+,)\{signal:([\w$]+)\.signal,model:[\w$]+\?\.model,modelOverride:[\w$]+\?\.modelOverride\},\{resumeFromStore:!0,onSessionReady:/g;
     const m9 = [...src.matchAll(re9)];
     if (m9.length !== 1) {
       console.error(`[ABORT] v8.resume-invoke: expected 1 match, got ${m9.length}`);
@@ -494,7 +501,7 @@ if (src.includes("__zCallSel")) {
     }
     src = src.replace(
       m9[0][0],
-      `${m9[0][1]}{signal:${m9[0][7]}.signal,...(${taskVar}.__zCallSel?{callModel:{selection:${taskVar}.__zCallSel}}:{})},{resumeFromStore:!0,onSessionReady:`,
+      `${m9[0][1]}{signal:${m9[0][2]}.signal,...(${taskVar}.__zCallSel?{callModel:{selection:${taskVar}.__zCallSel}}:{})},{resumeFromStore:!0,onSessionReady:`,
     );
   }
   console.log("v8 applied: call-level model persists across SendMessage resume (in-process)");
@@ -510,21 +517,24 @@ if (src.includes("__zCallSel")) {
 // 实证(7 天 model_usage):138 条零重试暴毙(全部 fin=null):「模型服务暂时
 // 繁忙」死 20、网络断开死 61、服务暂时不可用死 2 等;敏感内容/账号风控类
 // 终态属应死,不在此列。
-// 做法:①瞬态码检查源加入 providerCode(s4a 含 model_rate_limited,命中即瞬态);
+// 做法:①瞬态码检查源加入 providerCode(瞬态码集合含 model_rate_limited,命中即瞬态);
 // ②消息模式补中转繁忙类文案与自家流中网络断开文案。配额/敏感内容/风控类
 // 文案不匹配,保持终态;恢复预算仍受 STREAM_RECOVERY_MAX_RETRIES=10 封顶。
-if (src.includes("??LS(t.providerCode)")) {
+// 3.16.1 注:官方新增 g8e 繁忙码恢复(业务码 3008/3009/3010,仅官方渠道集),
+// 与本补丁互补——中转的自定义文案/字符串 providerCode 只有这里接得住。
+// 名称全部动态捕获(每版改名:LS→US、s4a→H4a、p4a→X4a);幂等标记用注入的中文文案。
+if (src.includes("暂时繁忙")) {
   console.log("v9 already applied — skipping stream-recovery transient fallback");
 } else {
   applyOnce(
     "v9.provider-code-source",
-    /let o=LS\(t\.code\)\?\?LS\(n\?\.code\);if\(o&&s4a\.has\(o\)\)return!0;/,
-    () => "let o=LS(t.code)??LS(n?.code)??LS(t.providerCode)??LS(n?.providerCode);if(o&&s4a.has(o))return!0;",
+    /let ([\w$]+)=([\w$]+)\(t\.code\)\?\?\2\(n\?\.code\);if\(\1&&([\w$]+)\.has\(\1\)\)return!0;/,
+    (g) => `let ${g[1]}=${g[2]}(t.code)??${g[2]}(n?.code)??${g[2]}(t.providerCode)??${g[2]}(n?.providerCode);if(${g[1]}&&${g[3]}.has(${g[1]}))return!0;`,
   );
   applyOnce(
     "v9.message-pattern",
-    /if\(c&&p4a\(c\)\)return!0/,
-    (g) => g[0] + ";if(c&&/暂时繁忙|稍后重试|服务繁忙|服务器忙|暂时不可用|没有可用节点|network connection failed|rate.?limit|too many requests|overloaded/i.test(c))return!0",
+    /let ([\w$]+)=([\w$]+)\(t\.message\);if\(\1&&([\w$]+)\(\1\)\)return!0/,
+    (g) => g[0] + `;if(${g[1]}&&/暂时繁忙|稍后重试|服务繁忙|服务器忙|暂时不可用|没有可用节点|network connection failed|rate.?limit|too many requests|overloaded/i.test(${g[1]}))return!0`,
   );
   console.log("v9 applied: stream-recovery transient fallback (providerCode + relay busy patterns)");
 }
