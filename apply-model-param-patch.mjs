@@ -23,6 +23,7 @@ const args = process.argv.slice(2);
 const restore = args[0] === "--restore";
 const swap = args[0] === "--swap";
 const noV2 = !args.includes("--with-v2"); // v2(行显示模型)已弃用:模型后缀挤乱智能体面板标题;默认跳过,须显式 --with-v2 才打入
+const noV7 = !args.includes("--with-v7"); // v7(McpSearch 网关)已退役:官方 3.16.1 上线同构 toolSearch,主人拍板切官方 auto 模式;默认不打,--with-v7 强制
 const target = args.find((a) => !a.startsWith("--"));
 if (!target) {
   console.error("usage: node apply-model-param-patch.mjs [--restore] <path-to-zcode.cjs>");
@@ -352,7 +353,9 @@ if (!v4Applied) {
 // (toolFound 且被禁 → 报错),审批由 UCn.permission(needsApproval=true)
 // 在 executor 层照常触发 — 网关不绕过任何 vendor 权限层。
 const v7Applied = src.includes("__zcodeMcpSearchEntry");
-if (!v7Applied) {
+if (noV7) {
+  console.log("v7 retired by default — official toolSearch adopted (pass --with-v7 to force)");
+} else if (!v7Applied) {
   const mInit = src.match(/\(([\w$]+),"initializeMcp"\)/);
   // v4 后形态:KFo 体开头插入了 __zcodeMcpSync 定义,gate 变为 return __zcodeMcpSync.call(this,e);
   const headOk = mInit && src.includes(`async function ${mInit[1]}(e){async function __zcodeMcpSync`) &&
