@@ -2,7 +2,7 @@
 
 非官方 ZCode Desktop 增强补丁集(Unofficial enhancement patches for ZCode Desktop)。
 
-六大能力:**子代理调用级选模**(Agent 工具直接指定这次用哪个模型)、**选模跨唤醒持久**(SendMessage 唤醒终态子代理不回落主模型,进程内)、**MCP 开关实时生效**(拨开关下一请求生效)、**分屏严格均分**(新建/关闭均重平衡)、**分屏创建入口**(官方 3.16.1 删掉的建格动作补回,窗格悬浮按钮一键分屏)、**流中断线兜底**(中转流中限流/繁忙/断连不再一发死,走流中恢复重开,配额与风控类仍终态)。
+五大能力:**子代理调用级选模**(Agent 工具直接指定这次用哪个模型)、**选模跨唤醒持久**(SendMessage 唤醒终态子代理不回落主模型,进程内)、**MCP 开关实时生效**(拨开关下一请求生效)、**分屏严格均分**(新建/关闭均重平衡)、**流中断线兜底**(中转流中限流/繁忙/断连不再一发死,走流中恢复重开,配额与风控类仍终态)。
 
 **v7(McpSearch 网关)已退役**(2026-10-19):官方 3.16.1 上线同构 toolSearch(auto 模式:目录公告 + select 物化 + DeferredToolCall 免 schema 直调 + compact 重注水),主人拍板切官方方案;默认构建不再注入 v7,需要时 `--with-v7` 强制开启。退役前的撞名事故与官方机制分析详见第 1 节。
 
@@ -93,16 +93,6 @@ npx @electron/asar pack <解包目录> app.asar.new --unpack "**/*.{node,dll,exe
 swap-asar.cmd
 ```
 
-### 6. 分屏创建入口(asar 渲染层补丁)
-
-**为什么做**:官方 3.16.1 起删掉了拖拽分屏的放置区(store 里的分屏动作原封未动,但 UI 再无入口),新窗格从此造不出来。本补丁把入口补回。
-
-**效果**:每个窗格右上角的悬浮动作层多出 `││`(向右分)/`══`(向下分)两枚按钮;点击后按当前窗格分出同工作区的新窗格。新窗格为空会话,点一下窗格使其聚焦,再到侧栏点任意对话即填入该窗格(v5 放宽官方路由门槛;窗格获得会话后,官方 draft-split 语义接管——侧栏点已在窗格里的会话会聚焦对应窗格,持续点击会跟随替换焦点窗格内容)。4 格上限守卫与均分重平衡全走官方逻辑与均分补丁。
-
-**原理**:布局 store(`__zPaneStore`)、官方 splitPaneAt 函数(`__zPaneSplit`,每版混淆名不同,动态捕获)与 workbench 组 store(`__zGroupStore`)挂到 globalThis;标签 store 的活实例在 Provider 组件渲染期挂到 `__zTabStoreLive`(官方 `window.__zcodeTabStoreE2E` 有测试门控,生产拿不到)。scope 解析:非主窗格用其 panes 表里的 workspaceScope 原样;主窗格 paneId 是字面量 `workspace-main`、永不在 panes 表里,回退到标签 store 的活动工作区构造 `{workspacePath, workspaceIdentity?}`——与官方持久化格式(ebn)与主窗格绑定推导(官方 c3)完全一致。注入前 onClick 体独立过 `node --check`,另配 `verify-splitentry.cjs` 从产物抽真串 vm 实跑九场景(主窗格/绑定窗格/组模式/未知 pid/无句柄/空工作区),`st.splitPane` 误写这类静态查不出、vm 一发即中的语义 bug 进不了产物。
-
-**已知边界**:workbench 组模式(组树在组 store,创建走官方 sessionIndex 完整性校验)下按钮安全 no-op——组内直写有状态腐坏风险,v4 不碰;渲染层 console 不转发进 `~/.zcode/v2/logs`,现场排障只能靠页面报错栈;坏布局(历史坏窗格)会在重启时被官方 `_pane-layout:v2` 校验器自愈丢弃。
-
 ---
 
 ## 快速开始(zcode.cjs 补丁)
@@ -133,10 +123,9 @@ node apply-model-param-patch.mjs --restore "C:\Program Files\ZCode\resources\glm
 # 2) 用原版覆盖已装文件(或对着原版路径),重跑补丁脚本
 node apply-model-param-patch.mjs "C:\Program Files\ZCode\resources\glm\zcode.cjs"
 
-# 3) 渲染层补丁:抽 chunk → 均分 → 分屏入口 → 重打包 → 头对头验证
+# 3) 渲染层补丁:抽 chunk → 均分 → 重打包 → 头对头验证
 node asar-extract-one.cjs  # 或 @electron/asar extract(需带 unpacked 覆盖)
 node patch-pane-balance.mjs    <styles-*.js>
-node patch-pane-splitentry.mjs <styles-*.js>
 npx @electron/asar pack <解包目录> app.asar.new --unpack "**/*.{node,dll,exe}"
 node verify-asar.cjs <原版.asar> <新版.asar> <原版.unpacked> <新版.unpacked>
 ```
