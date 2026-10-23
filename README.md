@@ -97,7 +97,7 @@ swap-asar.cmd
 
 **为什么做**:官方 3.16.1 起删掉了拖拽分屏的放置区(store 里的分屏动作原封未动,但 UI 再无入口),新窗格从此造不出来。本补丁把入口补回。
 
-**效果**:每个窗格右上角的悬浮动作层多出 `││`(向右分)/`══`(向下分)两枚按钮;点击后按当前窗格分出同工作区的新窗格(空会话,点侧栏任务填入)。4 格上限守卫与均分重平衡全走官方逻辑与均分补丁。
+**效果**:每个窗格右上角的悬浮动作层多出 `││`(向右分)/`══`(向下分)两枚按钮;点击后按当前窗格分出同工作区的新窗格。新窗格为空会话,点一下窗格使其聚焦,再到侧栏点任意对话即填入该窗格(v5 放宽官方路由门槛;窗格获得会话后,官方 draft-split 语义接管——侧栏点已在窗格里的会话会聚焦对应窗格,持续点击会跟随替换焦点窗格内容)。4 格上限守卫与均分重平衡全走官方逻辑与均分补丁。
 
 **原理**:布局 store(`__zPaneStore`)、官方 splitPaneAt 函数(`__zPaneSplit`,每版混淆名不同,动态捕获)与 workbench 组 store(`__zGroupStore`)挂到 globalThis;标签 store 的活实例在 Provider 组件渲染期挂到 `__zTabStoreLive`(官方 `window.__zcodeTabStoreE2E` 有测试门控,生产拿不到)。scope 解析:非主窗格用其 panes 表里的 workspaceScope 原样;主窗格 paneId 是字面量 `workspace-main`、永不在 panes 表里,回退到标签 store 的活动工作区构造 `{workspacePath, workspaceIdentity?}`——与官方持久化格式(ebn)与主窗格绑定推导(官方 c3)完全一致。注入前 onClick 体独立过 `node --check`,另配 `verify-splitentry.cjs` 从产物抽真串 vm 实跑九场景(主窗格/绑定窗格/组模式/未知 pid/无句柄/空工作区),`st.splitPane` 误写这类静态查不出、vm 一发即中的语义 bug 进不了产物。
 

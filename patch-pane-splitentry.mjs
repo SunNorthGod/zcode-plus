@@ -1,24 +1,23 @@
 #!/usr/bin/env node
 // ============================================================
-// ZCode 桌面端分屏创建入口补丁 v4(渲染层 styles-*.js)
+// ZCode 桌面端分屏创建入口补丁 v5(渲染层 styles-*.js)
 // ============================================================
-// v1 点击无反应;v2 点击即崩 fbn "reading 'workspaceIdentity'";v3 静默无效。
-// v3 失效定谳(实读 chunk):主布局 store 状态只有 {root,panes,focusedPaneId},
-//   fI 默认值即此三键——根本没有 activeGroupId/primaryBinding 字段(v3 的
-//   scope 三级链建立在误读上,全链必然空手);主窗格 paneId=字面量
-//   "workspace-main",永不在 panes 表里,其 workspace 由标签 store 的
-//   activeWorkspacePath/activeWorkspaceIdentity 决定(官方 c3 即此语义)。
-// v4:
-//   1. scope 解析:panes[pid].workspaceScope(非主窗格);主窗格回退到
-//      __zTabStoreLive(标签 store 活实例,注入进 B1e Provider)构造
-//      {workspacePath, workspaceIdentity?} —— 与官方 ebn 持久化形状一致;
-//   2. pid 归属自检:本 onClick 递归验 pid 在主布局 root 树中,不在则 no-op;
-//   3. 组模式守卫:workbench 组(activeGroupId 非空,组树在 JI store)下
-//      no-op——组创建走官方 sessionIndex 完整性校验(空会话键唯一性),
-//      绕过直写有状态腐坏风险,v4 不碰;
-//   4. onClick 体数组拼接构造,注入前整串独立过 node --check 真解析器。
-// 其余同 v3:store/split 函数句柄动态捕获挂 globalThis,<4 守卫与均分走
-// 官方逻辑与 __zpaneBalance。幂等:含 __zPaneStore 即跳过。
+// v1 点击无反应;v2 点击即崩 fbn "reading 'workspaceIdentity'";v3 静默无效;
+// v4 修成(装机实证可分屏)。
+// v5 增补「空窗格可被侧栏填充」:
+//   官方侧栏开会话路由 vbn 的门槛 _bn(e) 要求「被切走的会话已在某窗格」
+//   (官方流造窗格必带会话,空窗格 sessionId=null 永远进不了路由,主人实测
+//   分屏后无法选对话)。放宽为:焦点窗格有 panes 条目且无会话时也放行——
+//   点侧栏对话即经官方 replacePaneBinding 流填进该空窗格,填完后官方
+//   draft-split「窗格跟随侧栏」语义自然接管。组模式路由保持官方原样。
+// v4 核心(实读官方语义):主窗格 paneId=字面量 workspace-main 永不在 panes
+//   表,其 workspace 由标签 store(R1e 工厂,B1e Provider 活实例)决定
+//   (官方 c3 即此推导);onClick 对非主窗格用 panes[pid].workspaceScope
+//   原样,主窗格回退 __zTabStoreLive 构造 {workspacePath,workspaceIdentity?}
+//   (官方 ebn 持久化同形状);pid 自检在主布局 root 树;组模式 no-op。
+// 其余:store/split 函数/组 store 句柄动态捕获挂 globalThis,<4 守卫与均分
+// 走官方逻辑与 __zpaneBalance;onClick 注入前独立过 node --check。
+// 幂等:含 __zPaneStore 即跳过。
 // 用法:node patch-pane-splitentry.mjs <styles-*.js 路径>
 import { readFileSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
@@ -145,5 +144,22 @@ once("overlay.buttons",
   't?(0,$.jsx)(X,{type:`button`,variant:`outline`,size:`icon-md`,"data-testid":Fze,',
 );
 
+// ---------- 4. 侧栏会话路由:空窗格可被填充 ----------
+// vbn(官方侧栏开会话路由)门槛 _bn(e) 放宽:焦点窗格有 panes 条目且
+// sessionId 为空时也放行(官方不存在空窗格,原门槛使空窗格永远无法
+// 从侧栏获得会话)。函数名/局部名全动态捕获,正则锚定 vbn 头部形状。
+const mRoute = s.match(/function [\w$]+\(e,t\)\{let [\w$]+=[\w$]+\.getState\(\),([\w$]+)=[\w$]+\.getState\(\),[\w$]+=[\w$]+\(t\);if\(!([\w$]+)\.activeGroupId&&!\2\.sessionIndex\[[\w$]+\(t,t\.sessionId\)\]&&([\w$]+)\(e\)\)\{/);
+if (!mRoute) { console.error("[ABORT] sidebar session router (vbn) not found"); process.exit(1); }
+const routeHead = mRoute[0];
+if (s.indexOf(routeHead, s.indexOf(routeHead) + 1) >= 0) { console.error("[ABORT] router anchor not unique"); process.exit(1); }
+const routeVarU4 = mRoute[1], routeHasPanes = mRoute[3];
+console.log("session router captured: u4-local=" + routeVarU4 + " gate=" + routeHasPanes);
+const routeTail = "&&" + routeHasPanes + "(e)){";
+if (!routeHead.endsWith(routeTail)) { console.error("[ABORT] router tail unexpected"); process.exit(1); }
+once("session.router", routeHead,
+  routeHead.slice(0, routeHead.length - routeTail.length) +
+  "&&(" + routeHasPanes + "(e)||(" + routeVarU4 + ".panes[" + routeVarU4 + ".focusedPaneId]||{}).sessionId==null)){",
+);
+
 writeFileSync(p, s, "latin1");
-console.log("split-entry v4 injected OK:", p, "| size:", s.length);
+console.log("split-entry v5 injected OK:", p, "| size:", s.length);
