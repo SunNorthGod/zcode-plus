@@ -123,8 +123,12 @@ node apply-model-param-patch.mjs --restore "C:\Program Files\ZCode\resources\glm
 # 2) 用原版覆盖已装文件(或对着原版路径),重跑补丁脚本
 node apply-model-param-patch.mjs "C:\Program Files\ZCode\resources\glm\zcode.cjs"
 
-# 3) 回归验证
-node verify-v7.mjs
+# 3) 渲染层补丁:抽 chunk → 均分 → 分屏入口 → 重打包 → 头对头验证
+node asar-extract-one.cjs  # 或 @electron/asar extract(需带 unpacked 覆盖)
+node patch-pane-balance.mjs    <styles-*.js>
+node patch-pane-splitentry.mjs <styles-*.js>
+npx @electron/asar pack <解包目录> app.asar.new --unpack "**/*.{node,dll,exe}"
+node verify-asar.cjs <原版.asar> <新版.asar> <原版.unpacked> <新版.unpacked>
 ```
 
 官方重构导致锚点漂移时,脚本会**逐条点名失配位置并整体中止、不写盘**——照着报错更新正则即可,不会产生半打状态。
