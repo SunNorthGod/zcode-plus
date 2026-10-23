@@ -99,9 +99,9 @@ swap-asar.cmd
 
 **效果**:每个窗格右上角的悬浮动作层多出 `││`(向右分)/`══`(向下分)两枚按钮;点击后按当前窗格分出同工作区的新窗格(空会话,点侧栏任务填入)。4 格上限守卫与均分重平衡全走官方逻辑与均分补丁。
 
-**原理**:布局 store(`__zPaneStore`)与官方 splitPaneAt 函数(`__zPaneSplit`,每版混淆名不同,动态捕获)挂到 globalThis;按钮 onClick 解析 workspaceScope 时走三级链——本窗格 binding → 工作台组 primaryBinding → 根 primaryBinding——因为官方 splitPaneAt 把第三参**原样写进新窗格的 binding**,缺了会造出 `{workspaceScope: undefined}` 的坏窗格,渲染时读 `workspaceIdentity` 即崩(官方该方法没有 UI 调用方,裸调缺陷从未暴露)。无根布局(工作台组态)时对组布局复刻同一 split。onClick 体用数组拼接构造,注入前先独立过 `node --check` 真解析器,括号配平错误进不了产物。
+**原理**:布局 store(`__zPaneStore`)、官方 splitPaneAt 函数(`__zPaneSplit`,每版混淆名不同,动态捕获)与 workbench 组 store(`__zGroupStore`)挂到 globalThis;标签 store 的活实例在 Provider 组件渲染期挂到 `__zTabStoreLive`(官方 `window.__zcodeTabStoreE2E` 有测试门控,生产拿不到)。scope 解析:非主窗格用其 panes 表里的 workspaceScope 原样;主窗格 paneId 是字面量 `workspace-main`、永不在 panes 表里,回退到标签 store 的活动工作区构造 `{workspacePath, workspaceIdentity?}`——与官方持久化格式(ebn)与主窗格绑定推导(官方 c3)完全一致。注入前 onClick 体独立过 `node --check`,另配 `verify-splitentry.cjs` 从产物抽真串 vm 实跑九场景(主窗格/绑定窗格/组模式/未知 pid/无句柄/空工作区),`st.splitPane` 误写这类静态查不出、vm 一发即中的语义 bug 进不了产物。
 
-**已知边界**:渲染层 console 不转发进 `~/.zcode/v2/logs`,现场排障只能靠页面报错栈;坏布局(历史坏窗格)会在重启时被官方 `_pane-layout:v2` 校验器自愈丢弃。
+**已知边界**:workbench 组模式(组树在组 store,创建走官方 sessionIndex 完整性校验)下按钮安全 no-op——组内直写有状态腐坏风险,v4 不碰;渲染层 console 不转发进 `~/.zcode/v2/logs`,现场排障只能靠页面报错栈;坏布局(历史坏窗格)会在重启时被官方 `_pane-layout:v2` 校验器自愈丢弃。
 
 ---
 

@@ -1,18 +1,24 @@
 #!/usr/bin/env node
 // ============================================================
-// ZCode 桌面端分屏创建入口补丁 v3(渲染层 styles-*.js)
+// ZCode 桌面端分屏创建入口补丁 v4(渲染层 styles-*.js)
 // ============================================================
-// v1 症状:按钮点击无反应且布局零变化(疑按钮未渲染或点击未达 store)。
-// v2 症状:点按钮即崩 fbn "reading 'workspaceIdentity'"。
-// v3 修正:官方 splitPane 的第三参 workspaceScope 不可缺——传 undefined 会
-//   造出 {workspaceScope:undefined} 的坏窗格,fbn 渲染时读 workspaceIdentity
-//   即崩(官方该方法无 UI 调用方,故从未被裸调过)。scope 解析链:本窗格绑定
-//   → 组 primaryBinding → 根 primaryBinding;无根布局时对组布局复刻同一 split。
-//   渲染层 console 不进 ~/.zcode/v2/logs,挂载/点击日志对远程定位无用,v3 移除。
-//   onClick 体用数组拼接构造,注入前先独立过 node --check 真解析器,
-//   括号配平错误到此为止,进不了产物。
-// 其余同 v2:store 句柄 / data-pane-id 就近定位 / <4 守卫官方兜底 /
-// 均分由 __zpaneBalance 补丁自动生效。幂等:含 __zPaneStore 即跳过。
+// v1 点击无反应;v2 点击即崩 fbn "reading 'workspaceIdentity'";v3 静默无效。
+// v3 失效定谳(实读 chunk):主布局 store 状态只有 {root,panes,focusedPaneId},
+//   fI 默认值即此三键——根本没有 activeGroupId/primaryBinding 字段(v3 的
+//   scope 三级链建立在误读上,全链必然空手);主窗格 paneId=字面量
+//   "workspace-main",永不在 panes 表里,其 workspace 由标签 store 的
+//   activeWorkspacePath/activeWorkspaceIdentity 决定(官方 c3 即此语义)。
+// v4:
+//   1. scope 解析:panes[pid].workspaceScope(非主窗格);主窗格回退到
+//      __zTabStoreLive(标签 store 活实例,注入进 B1e Provider)构造
+//      {workspacePath, workspaceIdentity?} —— 与官方 ebn 持久化形状一致;
+//   2. pid 归属自检:本 onClick 递归验 pid 在主布局 root 树中,不在则 no-op;
+//   3. 组模式守卫:workbench 组(activeGroupId 非空,组树在 JI store)下
+//      no-op——组创建走官方 sessionIndex 完整性校验(空会话键唯一性),
+//      绕过直写有状态腐坏风险,v4 不碰;
+//   4. onClick 体数组拼接构造,注入前整串独立过 node --check 真解析器。
+// 其余同 v3:store/split 函数句柄动态捕获挂 globalThis,<4 守卫与均分走
+// 官方逻辑与 __zpaneBalance。幂等:含 __zPaneStore 即跳过。
 // 用法:node patch-pane-splitentry.mjs <styles-*.js 路径>
 import { readFileSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
@@ -32,13 +38,25 @@ function once(name, find, replace) {
   s = s.slice(0, idx) + replace + s.slice(idx + find.length);
 }
 
-// ---------- 0. 动态捕获官方 splitPaneAt 函数名 ----------
+// ---------- 0. 动态捕获 ----------
+// splitPaneAt 函数名(store def 内)
 const mSplit = s.match(/splitPane:\(t,n,r\)=>\{e\(\w+=>([\w$]+)\(e,t,n/);
 if (!mSplit) { console.error("[ABORT] splitPaneAt fn not found in store def"); process.exit(1); }
 const splitFn = mSplit[1];
 console.log("splitPaneAt captured:", splitFn);
+// workbench 组 store 变量名({activeGroupId,groups,sessionIndex},configureClientMode 注册串定位)
+const mGroup = s.match(/([\w$]+)=Xa\(\)\(\(e,t\)=>\(\{\.\.\.([\w$]+),configureClientMode:/);
+if (!mGroup) { console.error("[ABORT] group store def not found"); process.exit(1); }
+const groupVar = mGroup[1];
+if (s.indexOf(mGroup[0], s.indexOf(mGroup[0]) + 1) >= 0) { console.error("[ABORT] group store anchor not unique"); process.exit(1); }
+console.log("group store captured:", groupVar, "(initial:", mGroup[2] + ")");
+// 标签 store 工厂函数名(R1e 形态:tabs/pendingFileManagerTarget 初始键定位)
+const mTabFac = s.match(/function ([\w$]+)\([^)]*\)\{return Xa\(\)\(\(t,n\)=>\(\{tabs:\[\],pendingFileManagerTarget:null/);
+if (!mTabFac) { console.error("[ABORT] tab store factory not found"); process.exit(1); }
+const tabFac = mTabFac[1];
+console.log("tab store factory captured:", tabFac);
 
-// ---------- 1. store + split 函数双句柄 ----------
+// ---------- 1. 主布局 store 三句柄 ----------
 const storeHead = "var u4=Xa()(e=>({";
 const headIdx = s.indexOf(storeHead);
 if (headIdx < 0 || s.indexOf(storeHead, headIdx + 1) >= 0) {
@@ -60,32 +78,46 @@ if (headIdx < 0 || s.indexOf(storeHead, headIdx + 1) >= 0) {
   if (depth !== 0) { console.error("[ABORT] store brace scan failed"); process.exit(1); }
   const tail = s.slice(i, i + 3);
   if (tail !== `}))`) { console.error(`[ABORT] store tail unexpected: ${JSON.stringify(tail)}`); process.exit(1); }
-  s = s.slice(0, i + 3) + `;globalThis.__zPaneStore=u4;globalThis.__zPaneSplit=${splitFn};` + s.slice(i + 3);
-  console.log("handles stashed: __zPaneStore + __zPaneSplit");
+  s = s.slice(0, i + 3) +
+    `;globalThis.__zPaneStore=u4;globalThis.__zPaneSplit=${splitFn};globalThis.__zGroupStore=${groupVar};` +
+    s.slice(i + 3);
+  console.log("handles stashed: __zPaneStore + __zPaneSplit + __zGroupStore");
 }
 
-// ---------- 2. p1t 悬浮动作层 ----------
-// 2a. 渲染条件放宽(主窗格 onClosePane/workspaceBadge 均空时也能出分屏按钮)
+// ---------- 2. 标签 store 活实例句柄(B1e Provider 渲染期) ----------
+// t.current 即 jT context value = 全部 useTabStore(MT hook) 读的活 store;
+// 官方 window.__zcodeTabStoreE2E 有 Wa() 测试门控,生产拿不到,这里无条件挂。
+once("tabstore.handle",
+  `t.current||=${tabFac}(),(0,Q.useEffect)(`,
+  `t.current||=${tabFac}(),globalThis.__zTabStoreLive=t.current,(0,Q.useEffect)(`,
+);
+
+// ---------- 3. p1t 悬浮动作层 ----------
+// 3a. 渲染条件放宽(主窗格 onClosePane/workspaceBadge 均空时也能出分屏按钮)
 once("overlay.condition",
   'n||t?(0,$.jsxs)(`div`,{"data-v4-pane-actions":`floating`',
   'n||t||globalThis.__zPaneStore?(0,$.jsxs)(`div`,{"data-v4-pane-actions":`floating`',
 );
 
-// 2b. 关闭按钮前插入两个分屏按钮
+// 3b. 关闭按钮前插入两个分屏按钮
 const btn = (dir, label, glyph) => {
   const body = [
     'let el=ev&&ev.currentTarget&&ev.currentTarget.closest("[data-pane-id]");',
     'let pid=el&&el.getAttribute("data-pane-id");',
     "let st=globalThis.__zPaneStore,sp=globalThis.__zPaneSplit;",
     "if(!pid||!st||!sp)return;",
-    "let ss=st.getState(),gid=ss.activeGroupId;",
-    "let pb=gid&&ss.groups&&ss.groups[gid]?ss.groups[gid].primaryBinding:ss.primaryBinding;",
-    "let scope=ss.panes&&ss.panes[pid]&&ss.panes[pid].workspaceScope||pb&&pb.workspaceScope;",
-    "if(!scope)return;",
-    'if(!gid||!ss.groups||!ss.groups[gid]){ss.splitPane(pid,"' + dir + '",scope);return}',
-    "let grp=ss.groups[gid];",
-    'let ns=sp(grp,pid,"' + dir + '",{workspaceScope:scope,sessionId:null});',
-    "if(ns!==grp)st.setState(function(prev){return{groups:Object.assign({},prev.groups,{[gid]:ns})}})",
+    "let gs=globalThis.__zGroupStore&&globalThis.__zGroupStore.getState();",
+    "if(gs&&gs.activeGroupId)return;",
+    "let ss=st.getState();",
+    'let has=function(n,id){return n.type==="leaf"?n.paneId===id:has(n.first,id)||has(n.second,id)};',
+    "if(!has(ss.root,pid))return;",
+    "let scope=ss.panes&&ss.panes[pid]&&ss.panes[pid].workspaceScope;",
+    "if(!scope){let ts=globalThis.__zTabStoreLive&&globalThis.__zTabStoreLive.getState();",
+    "let wp=ts&&ts.activeWorkspacePath,wi=ts&&ts.activeWorkspaceIdentity;",
+    "if(!wp&&!wi)return;",
+    "scope={workspacePath:wp};",
+    "if(wi)scope.workspaceIdentity=wi;}",
+    'ss.splitPane(pid,"' + dir + '",scope)',
   ].join("");
   return (
     'globalThis.__zPaneStore?(0,$.jsx)(X,{type:`button`,variant:`outline`,size:`icon-md`,"data-testid":"z-split-' + dir + '",' +
@@ -114,4 +146,4 @@ once("overlay.buttons",
 );
 
 writeFileSync(p, s, "latin1");
-console.log("split-entry v3 injected OK:", p, "| size:", s.length);
+console.log("split-entry v4 injected OK:", p, "| size:", s.length);
