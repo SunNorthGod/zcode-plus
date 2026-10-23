@@ -1,19 +1,23 @@
 #!/usr/bin/env node
 // ============================================================
-// ZCode 桌面端分屏创建入口补丁 v2(渲染层 styles-*.js)
+// ZCode 桌面端分屏创建入口补丁 v3(渲染层 styles-*.js)
 // ============================================================
 // v1 症状:按钮点击无反应且布局零变化(疑按钮未渲染或点击未达 store)。
-// v2 变化:
-//   1. 可观测性:p1t 挂载与按钮点击均打 console.log(渲染层 console
-//      转发进 ~/.zcode/v2/logs,可远程定位断点);
-//   2. 双模式分派:无 activeGroupId → 官方 splitPane(根布局);
-//      有 activeGroupId(workbench 组) → 对 groups[gid] 复刻同一 split
-//      (官方 split 函数动态捕获自 store 定义,经 __zPaneSplit 暴露);
-//   3. split 函数名动态捕获(每版改名,Zvt 为 3163 名),捕获失败即中止。
-// 其余同 v1:store 句柄 / data-pane-id 就近定位 / <4 守卫官方兜底 /
+// v2 症状:点按钮即崩 fbn "reading 'workspaceIdentity'"。
+// v3 修正:官方 splitPane 的第三参 workspaceScope 不可缺——传 undefined 会
+//   造出 {workspaceScope:undefined} 的坏窗格,fbn 渲染时读 workspaceIdentity
+//   即崩(官方该方法无 UI 调用方,故从未被裸调过)。scope 解析链:本窗格绑定
+//   → 组 primaryBinding → 根 primaryBinding;无根布局时对组布局复刻同一 split。
+//   渲染层 console 不进 ~/.zcode/v2/logs,挂载/点击日志对远程定位无用,v3 移除。
+//   onClick 体用数组拼接构造,注入前先独立过 node --check 真解析器,
+//   括号配平错误到此为止,进不了产物。
+// 其余同 v2:store 句柄 / data-pane-id 就近定位 / <4 守卫官方兜底 /
 // 均分由 __zpaneBalance 补丁自动生效。幂等:含 __zPaneStore 即跳过。
 // 用法:node patch-pane-splitentry.mjs <styles-*.js 路径>
 import { readFileSync, writeFileSync } from "node:fs";
+import { execSync } from "node:child_process";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 const p = process.argv[2];
 if (!p) { console.error("usage: node patch-pane-splitentry.mjs <renderer styles-*.js>"); process.exit(1); }
@@ -61,36 +65,53 @@ if (headIdx < 0 || s.indexOf(storeHead, headIdx + 1) >= 0) {
 }
 
 // ---------- 2. p1t 悬浮动作层 ----------
-// 2a. 挂载观测 + 渲染条件放宽
+// 2a. 渲染条件放宽(主窗格 onClosePane/workspaceBadge 均空时也能出分屏按钮)
 once("overlay.condition",
-  'function p1t({title:e,onClosePane:t,workspaceBadge:n}){let{intl:r}=q();',
-  'function p1t({title:e,onClosePane:t,workspaceBadge:n}){let{intl:r}=q();try{console.log("[z-split] overlay render store="+!!globalThis.__zPaneStore+" badge="+(!!n)+" close="+(!!t))}catch(z1){};',
-);
-once("overlay.condition2",
   'n||t?(0,$.jsxs)(`div`,{"data-v4-pane-actions":`floating`',
   'n||t||globalThis.__zPaneStore?(0,$.jsxs)(`div`,{"data-v4-pane-actions":`floating`',
 );
 
-// 2b. 关闭按钮前插入两个分屏按钮(双模式分派 + 点击观测)
-const btn = (dir, label, glyph) =>
-  'globalThis.__zPaneStore?(0,$.jsx)(X,{type:`button`,variant:`outline`,size:`icon-md`,"data-testid":"z-split-' + dir + '",' +
-  'onClick:ev=>{try{let el=ev&&ev.currentTarget&&ev.currentTarget.closest("[data-pane-id]");let pid=el&&el.getAttribute("data-pane-id");' +
-  'let st=globalThis.__zPaneStore,sp=globalThis.__zPaneSplit;' +
-  'if(!pid||!st||!sp){console.warn("[z-split] missing pid/store/fn",!!pid,!!st,!!sp);return}' +
-  'let ss=st.getState(),gid=ss.activeGroupId;' +
-  'if(!gid){ss.splitPane(pid,"' + dir + '");console.log("[z-split] root split ok",pid);return}' +
-  'let grp=ss.groups&&ss.groups[gid];if(!grp){console.warn("[z-split] group missing",gid);ss.splitPane(pid,"' + dir + '");return}' +
-  'let ns=sp(grp,pid,"' + dir + '",{workspaceScope:void 0,sessionId:null});' +
-  'if(ns!==grp)st.setState(function(prev){return{groups:Object.assign({},prev.groups,{[gid]:ns})}});' +
-  'console.log("[z-split] group split",gid,pid,ns!==grp)}catch(z2){console.warn("[z-split] error",z2&&z2.message)}},' +
-  'title:"Split ' + label + ' (this pane)","aria-label":"Split ' + label + '",' +
-  'className:`pointer-events-auto bg-[var(--color-popover)] shadow-md`,children:"' + glyph + '"}):null,';
+// 2b. 关闭按钮前插入两个分屏按钮
+const btn = (dir, label, glyph) => {
+  const body = [
+    'let el=ev&&ev.currentTarget&&ev.currentTarget.closest("[data-pane-id]");',
+    'let pid=el&&el.getAttribute("data-pane-id");',
+    "let st=globalThis.__zPaneStore,sp=globalThis.__zPaneSplit;",
+    "if(!pid||!st||!sp)return;",
+    "let ss=st.getState(),gid=ss.activeGroupId;",
+    "let pb=gid&&ss.groups&&ss.groups[gid]?ss.groups[gid].primaryBinding:ss.primaryBinding;",
+    "let scope=ss.panes&&ss.panes[pid]&&ss.panes[pid].workspaceScope||pb&&pb.workspaceScope;",
+    "if(!scope)return;",
+    'if(!gid||!ss.groups||!ss.groups[gid]){ss.splitPane(pid,"' + dir + '",scope);return}',
+    "let grp=ss.groups[gid];",
+    'let ns=sp(grp,pid,"' + dir + '",{workspaceScope:scope,sessionId:null});',
+    "if(ns!==grp)st.setState(function(prev){return{groups:Object.assign({},prev.groups,{[gid]:ns})}})",
+  ].join("");
+  return (
+    'globalThis.__zPaneStore?(0,$.jsx)(X,{type:`button`,variant:`outline`,size:`icon-md`,"data-testid":"z-split-' + dir + '",' +
+    "onClick:ev=>{" + body + "}," +
+    'title:"Split ' + label + ' (this pane)","aria-label":"Split ' + label + '",' +
+    'className:`pointer-events-auto bg-[var(--color-popover)] shadow-md`,children:"' + glyph + '"}):null,'
+  );
+};
+
+const btnRow = btn("row", "right", "\\u2502\\u2502");
+const btnCol = btn("column", "down", "\\u2550\\u2550");
+
+// 注入前回归门:两枚按钮整串独立过 node --check 真解析器
+{
+  const probe = join(tmpdir(), "z-splitentry-probe.mjs");
+  writeFileSync(probe, "var v=[" + btnRow + btnCol + "null];\n");
+  try { execSync("node --check " + JSON.stringify(probe), { stdio: "pipe" }); }
+  catch (e) { console.error("[ABORT] injected buttons fail node --check:\n" + String(e.stderr).slice(0, 500)); process.exit(1); }
+  console.log("button strings pass standalone node --check");
+}
 
 once("overlay.buttons",
   't?(0,$.jsx)(X,{type:`button`,variant:`outline`,size:`icon-md`,"data-testid":Fze,',
-  btn("row", "right", "\\u2502\\u2502") + btn("column", "down", "\\u2550\\u2550") +
+  btnRow + btnCol +
   't?(0,$.jsx)(X,{type:`button`,variant:`outline`,size:`icon-md`,"data-testid":Fze,',
 );
 
 writeFileSync(p, s, "latin1");
-console.log("split-entry v2 injected OK:", p, "| size:", s.length);
+console.log("split-entry v3 injected OK:", p, "| size:", s.length);

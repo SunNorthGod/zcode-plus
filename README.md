@@ -2,7 +2,7 @@
 
 非官方 ZCode Desktop 增强补丁集(Unofficial enhancement patches for ZCode Desktop)。
 
-五大能力:**子代理调用级选模**(Agent 工具直接指定这次用哪个模型)、**选模跨唤醒持久**(SendMessage 唤醒终态子代理不回落主模型,进程内)、**MCP 开关实时生效**(拨开关下一请求生效)、**分屏严格均分**(新建/关闭均重平衡)、**流中断线兜底**(中转流中限流/繁忙/断连不再一发死,走流中恢复重开,配额与风控类仍终态)。
+六大能力:**子代理调用级选模**(Agent 工具直接指定这次用哪个模型)、**选模跨唤醒持久**(SendMessage 唤醒终态子代理不回落主模型,进程内)、**MCP 开关实时生效**(拨开关下一请求生效)、**分屏严格均分**(新建/关闭均重平衡)、**分屏创建入口**(官方 3.16.1 删掉的建格动作补回,窗格悬浮按钮一键分屏)、**流中断线兜底**(中转流中限流/繁忙/断连不再一发死,走流中恢复重开,配额与风控类仍终态)。
 
 **v7(McpSearch 网关)已退役**(2026-10-19):官方 3.16.1 上线同构 toolSearch(auto 模式:目录公告 + select 物化 + DeferredToolCall 免 schema 直调 + compact 重注水),主人拍板切官方方案;默认构建不再注入 v7,需要时 `--with-v7` 强制开启。退役前的撞名事故与官方机制分析详见第 1 节。
 
@@ -92,6 +92,16 @@ npx @electron/asar pack <解包目录> app.asar.new --unpack "**/*.{node,dll,exe
 # 4) 提权换入(脚本会等 ZCode 完全退出、备份原文件、换入并重启)
 swap-asar.cmd
 ```
+
+### 6. 分屏创建入口(asar 渲染层补丁)
+
+**为什么做**:官方 3.16.1 起删掉了拖拽分屏的放置区(store 里的分屏动作原封未动,但 UI 再无入口),新窗格从此造不出来。本补丁把入口补回。
+
+**效果**:每个窗格右上角的悬浮动作层多出 `││`(向右分)/`══`(向下分)两枚按钮;点击后按当前窗格分出同工作区的新窗格(空会话,点侧栏任务填入)。4 格上限守卫与均分重平衡全走官方逻辑与均分补丁。
+
+**原理**:布局 store(`__zPaneStore`)与官方 splitPaneAt 函数(`__zPaneSplit`,每版混淆名不同,动态捕获)挂到 globalThis;按钮 onClick 解析 workspaceScope 时走三级链——本窗格 binding → 工作台组 primaryBinding → 根 primaryBinding——因为官方 splitPaneAt 把第三参**原样写进新窗格的 binding**,缺了会造出 `{workspaceScope: undefined}` 的坏窗格,渲染时读 `workspaceIdentity` 即崩(官方该方法没有 UI 调用方,裸调缺陷从未暴露)。无根布局(工作台组态)时对组布局复刻同一 split。onClick 体用数组拼接构造,注入前先独立过 `node --check` 真解析器,括号配平错误进不了产物。
+
+**已知边界**:渲染层 console 不转发进 `~/.zcode/v2/logs`,现场排障只能靠页面报错栈;坏布局(历史坏窗格)会在重启时被官方 `_pane-layout:v2` 校验器自愈丢弃。
 
 ---
 
